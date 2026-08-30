@@ -805,6 +805,7 @@ export const api = {
       preLearningScore: 48,
       postLearningScore: scorePercentage,
       scoreImprovement: Math.max(0, scorePercentage - 48),
+      passed,
       previousOverallReadiness: 74,
       newOverallReadiness: passed ? 84 : 74,
       readinessImprovement: passed ? 10 : 0,

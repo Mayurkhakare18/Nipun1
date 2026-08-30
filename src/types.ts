@@ -320,8 +320,18 @@ export interface ReassessmentResult {
   postLearningScore: number;
   scoreImprovement: number;
   passed: boolean;
-  passingScore: number;
+  passingScore?: number;
+  status?: string;
+  previousLevel?: number;
+  newLevel?: number;
+  remainingGap?: number;
+  previousOverallReadiness?: number;
+  newOverallReadiness?: number;
+  readinessImprovement?: number;
+  sparrowSynced?: boolean;
+  sparrowSyncTimestamp?: string;
   evaluatedCompetencies: {
+    competencyId?: string;
     competencyName: string;
     previousLevel: number;
     newLevel: number;
@@ -336,15 +346,17 @@ export interface ReassessmentResult {
 export interface UploadedDocument {
   id: string;
   fileName: string;
-  fileSize: number;
-  fileType: string;
-  uploadedBy: string;
+  fileSize?: number;
+  fileSizeFormatted?: string;
+  fileType?: string;
+  uploadedBy?: string;
   uploadedAt: string;
-  purpose: 'TRAINER_ASSESSMENT_GENERATION' | 'LEARNING_MATERIAL';
-  extractedTopics: string[];
-  keySummary: string;
+  purpose?: 'TRAINER_ASSESSMENT_GENERATION' | 'LEARNING_MATERIAL';
+  extractedTopics?: string[];
+  keySummary?: string;
   status: 'PROCESSED' | 'PROCESSING' | 'ERROR';
-  generatedQuestionsCount: number;
+  generatedQuestionsCount?: number;
+  competency?: string;
 }
 
 export interface AIMentorMessage {
