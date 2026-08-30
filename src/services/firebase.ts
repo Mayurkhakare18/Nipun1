@@ -60,95 +60,87 @@ export const firestore: Firestore = firebaseConfigJson.firestoreDatabaseId
  */
 export const firebaseService = {
   /**
-   * Google Sign-In with popup and resilient fallback
+   * Check if user is returning from a Firebase Google Redirect Auth flow
    */
-  async signInWithGoogle(): Promise<{ user: UserProfile; firebaseUser?: FirebaseUser }> {
+  async checkRedirectAuth(): Promise<{ user: UserProfile; firebaseUser: FirebaseUser } | null> {
     try {
-      let firebaseUser: FirebaseUser | null = null;
-      let email: string | null = null;
-      let name: string | null = null;
-      let googleUid: string | null = null;
+      const redirectResult = await getRedirectResult(auth);
+      if (redirectResult && redirectResult.user) {
+        const firebaseUser = redirectResult.user;
+        const email = firebaseUser.email || 'officer@mospi.gov.in';
+        const name = firebaseUser.displayName || email.split('@')[0];
+        const googleUid = firebaseUser.uid;
 
-      // 1. Check if returning from Firebase signInWithRedirect
-      try {
-        const redirectResult = await getRedirectResult(auth);
-        if (redirectResult && redirectResult.user) {
-          firebaseUser = redirectResult.user;
-          email = firebaseUser.email;
-          name = firebaseUser.displayName;
-          googleUid = firebaseUser.uid;
-        }
-      } catch (redirectResultErr: any) {
-        console.warn('[Firebase] getRedirectResult notice:', redirectResultErr?.message || redirectResultErr);
-      }
-
-      // 2. Try Firebase Popup Authentication
-      if (!email) {
-        try {
-          const result = await signInWithPopup(auth, googleProvider);
-          firebaseUser = result.user;
-          if (firebaseUser) {
-            email = firebaseUser.email;
-            name = firebaseUser.displayName;
-            googleUid = firebaseUser.uid;
-          }
-        } catch (popupErr: any) {
-          console.warn('[Firebase] Popup authentication notice:', popupErr?.code || popupErr?.message);
-        }
-      }
-
-      // 3. Check URL hash for OAuth 2.0 Implicit token if present
-      if (!email && typeof window !== 'undefined' && window.location.hash.includes('access_token=')) {
-        try {
-          const hashParams = new URLSearchParams(window.location.hash.replace('#', ''));
-          const accessToken = hashParams.get('access_token');
-          if (accessToken) {
-            const userInfoRes = await fetch(`https://www.googleapis.com/oauth2/v3/userinfo?access_token=${accessToken}`);
-            if (userInfoRes.ok) {
-              const userInfo = await userInfoRes.json();
-              email = userInfo.email;
-              name = userInfo.name || userInfo.given_name;
-              googleUid = userInfo.sub;
-              window.history.replaceState(null, '', window.location.pathname);
-            }
-          }
-        } catch (hashErr) {
-          console.warn('[Google OAuth] Hash token extraction note:', hashErr);
-        }
-      }
-
-      // 4. If real Google credentials were obtained, verify with NIPUN backend
-      if (email) {
         const backendRes = await api.googleVerify({
           email,
-          name: name || email.split('@')[0],
-          googleUid: googleUid || undefined,
+          name,
+          googleUid,
         });
 
         if (backendRes.success && backendRes.user) {
-          return { user: backendRes.user, firebaseUser: firebaseUser || undefined };
+          return { user: backendRes.user, firebaseUser };
+        }
+      }
+    } catch (err: any) {
+      console.warn('[Firebase] checkRedirectAuth note:', err?.code || err?.message || err);
+    }
+    return null;
+  },
+
+  /**
+   * Pure Firebase Google Sign-In (Popup & Redirect via https://optimum-stone-1q6d2.firebaseapp.com/__/auth/handler)
+   */
+  async signInWithGoogle(): Promise<{ user: UserProfile; firebaseUser?: FirebaseUser }> {
+    try {
+      // 1. Check if returning from redirect auth
+      const redirectAuth = await this.checkRedirectAuth();
+      if (redirectAuth) {
+        return redirectAuth;
+      }
+
+      // 2. Attempt Firebase Popup Authentication
+      let firebaseUser: FirebaseUser | null = null;
+      try {
+        const popupResult = await signInWithPopup(auth, googleProvider);
+        if (popupResult && popupResult.user) {
+          firebaseUser = popupResult.user;
+        }
+      } catch (popupErr: any) {
+        console.warn('[Firebase] Popup authentication note:', popupErr?.code || popupErr?.message);
+        
+        // 3. If popup is blocked by browser or closed, trigger Firebase Redirect Auth
+        if (
+          popupErr?.code === 'auth/popup-blocked' ||
+          popupErr?.code === 'auth/popup-closed-by-user' ||
+          popupErr?.code === 'auth/cancelled-popup-request' ||
+          popupErr?.code === 'auth/unauthorized-domain'
+        ) {
+          await signInWithRedirect(auth, googleProvider);
+          return new Promise(() => {}) as any; // Browser navigating to Firebase Auth Handler
+        }
+        throw popupErr;
+      }
+
+      // 4. If popup succeeded, verify user credentials with NIPUN backend
+      if (firebaseUser) {
+        const email = firebaseUser.email || 'officer@mospi.gov.in';
+        const name = firebaseUser.displayName || email.split('@')[0];
+        const googleUid = firebaseUser.uid;
+
+        const backendRes = await api.googleVerify({
+          email,
+          name,
+          googleUid,
+        });
+
+        if (backendRes.success && backendRes.user) {
+          return { user: backendRes.user, firebaseUser };
         }
       }
 
-      // 5. Firebase Redirect Auth (uses pre-configured Firebase Handler: https://optimum-stone-1q6d2.firebaseapp.com/__/auth/handler)
-      try {
-        await signInWithRedirect(auth, googleProvider);
-        return new Promise(() => {}) as any; // Navigation pending
-      } catch (redirectErr: any) {
-        console.warn('[Firebase] Redirect auth notice:', redirectErr?.code || redirectErr?.message);
-      }
-
-      // 6. Direct Google OAuth 2.0 Authorization Server Redirect (clean origin URI fallback)
-      if (typeof window !== 'undefined') {
-        const clientId = firebaseConfigJson.oAuthClientId || '946189640461-49aqr0kegmsuk20asatus8stv2lnr2o0.apps.googleusercontent.com';
-        const cleanOrigin = window.location.origin.replace(/\/$/, '');
-        const redirectUri = encodeURIComponent(cleanOrigin);
-        const googleAuthUrl = `https://accounts.google.com/o/oauth2/v2/auth?client_id=${clientId}&redirect_uri=${redirectUri}&response_type=token&scope=email%20profile&prompt=select_account`;
-        window.location.href = googleAuthUrl;
-        return new Promise(() => {}) as any;
-      }
-
-      throw new Error('Google Authentication process could not be completed.');
+      // Fallback: Trigger Firebase Redirect Auth
+      await signInWithRedirect(auth, googleProvider);
+      return new Promise(() => {}) as any;
     } catch (error: any) {
       console.error('[Firebase/Google] Authentication processing error:', error);
       throw error;

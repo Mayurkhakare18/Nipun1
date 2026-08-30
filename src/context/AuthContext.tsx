@@ -1241,20 +1241,18 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const initSession = useCallback(async () => {
     setIsLoading(true);
     try {
-      // 0. Check if returning from Google OAuth redirect or hash token
-      if (typeof window !== 'undefined' && (window.location.hash.includes('access_token=') || window.location.search.includes('apiKey='))) {
-        try {
-          const { user } = await firebaseService.signInWithGoogle();
-          if (user) {
-            syncUserData(user);
-            setIsAuthReady(true);
-            setIsLoading(false);
-            showNotification('Google Authentication Verified', `Signed in as ${user.name} (${user.email})`);
-            return;
-          }
-        } catch (oauthErr) {
-          console.warn('[Google OAuth Init] Token processing notice:', oauthErr);
+      // 0. Check if returning from Firebase Google Redirect Auth
+      try {
+        const redirectRes = await firebaseService.checkRedirectAuth();
+        if (redirectRes?.user) {
+          syncUserData(redirectRes.user);
+          setIsAuthReady(true);
+          setIsLoading(false);
+          showNotification('Google Authentication Verified', `Signed in as ${redirectRes.user.name} (${redirectRes.user.email})`);
+          return;
         }
+      } catch (redirectErr) {
+        console.warn('[Google OAuth Init] Redirect check notice:', redirectErr);
       }
 
       const existingToken = tokenStorage.get();
