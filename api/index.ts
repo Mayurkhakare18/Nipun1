@@ -56,6 +56,15 @@ export default async function handler(req: any, res: any) {
     const safePath = (req.url || '').split('?')[0];
     console.log(`[BOOT] Request received: ${req.method} ${safePath} (Full: ${req.url})`);
 
+    if (typeof app !== 'function') {
+      console.error('[BOOT] App is not a function:', typeof app);
+      return res.status(500).json({
+        success: false,
+        error: 'APP_NOT_A_FUNCTION',
+        message: `Express app export resolved as ${typeof app}`,
+      });
+    }
+
     return (app as any)(req, res);
   } catch (err: any) {
     console.error('Vercel Serverless Function Unhandled Error:', err?.stack || err?.message || String(err));

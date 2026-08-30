@@ -1,9 +1,7 @@
-import { createRequire } from 'module';
-const require = createRequire(import.meta.url);
-const express = require('express');
-const pg = require('pg');
-type Request = any;
-type Response = any;
+import express, { type Request, type Response } from 'express';
+import pg from 'pg';
+
+const expressFn = (express as any).default || express;
 
 import { db } from './db';
 import { igotAdapter } from './integrations/igot/igot.client';
@@ -32,7 +30,7 @@ import type {
   CompetencyUpgradeRecord,
 } from '../src/types';
 
-const Pool = pg.Pool || pg.default?.Pool || pg;
+const Pool = (pg as any).Pool || (pg as any).default?.Pool || pg;
 
 import {
   normalizeDatabaseUrl,
@@ -65,7 +63,7 @@ function getDbHealthPool(): any {
 }
 
 export function createExpressApp() {
-  const app = express();
+  const app = expressFn();
 
   // CORS & Preflight handling for Vercel and production environments
   app.use((req, res, next) => {
