@@ -25,6 +25,7 @@ import {
   GraduationCap,
   Layers,
   Upload,
+  LogOut,
 } from 'lucide-react';
 
 export const LearnerDashboard: React.FC = () => {
@@ -42,6 +43,7 @@ export const LearnerDashboard: React.FC = () => {
     openReassessment,
     openDocIntelligence,
     showNotification,
+    logout,
   } = useAuth();
 
   const [gaps, setGaps] = useState<GapAnalysisResult[]>([]);
@@ -214,6 +216,15 @@ export const LearnerDashboard: React.FC = () => {
             >
               <BrainCircuit className="w-4 h-4 text-amber-400" />
               <span>AI Mentor</span>
+            </button>
+
+            <button
+              onClick={() => logout()}
+              className="flex items-center gap-1.5 px-3.5 py-2 bg-rose-50 hover:bg-rose-100 text-rose-800 text-xs font-semibold rounded-lg border border-rose-200 transition-all cursor-pointer shadow-2xs"
+              title="Sign out of your official session"
+            >
+              <LogOut className="w-4 h-4 text-rose-600" />
+              <span>Logout</span>
             </button>
           </div>
         </div>
