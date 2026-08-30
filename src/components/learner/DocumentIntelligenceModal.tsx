@@ -90,18 +90,53 @@ export const DocumentIntelligenceModal: React.FC = () => {
   };
 
   const handleFileSelected = (file: File) => {
+    // Validate file size limit (15MB serverless cap)
+    if (file.size > 15 * 1024 * 1024) {
+      showNotification('File Too Large', 'File exceeds 15MB serverless size limit. Please select a smaller document.', 'warning');
+      return;
+    }
+
     setSelectedFile(file);
     setDocumentTitle(file.name);
 
-    // Read text from file
     const reader = new FileReader();
     reader.onload = (event) => {
-      const text = event.target?.result as string;
-      setDocumentText(text || `Uploaded document: ${file.name}`);
+      const rawContent = (event.target?.result as string) || '';
+
+      if (file.name.toLowerCase().endsWith('.pdf')) {
+        // PDF text extraction: Extract printable text chunks from PDF streams
+        const textMatches = rawContent.match(/\(([^()]+)\)\s*T[jJ]/g) || rawContent.match(/BT[\s\S]*?ET/g);
+        let extractedText = '';
+        if (textMatches && textMatches.length > 0) {
+          extractedText = textMatches.map((m) => m.replace(/[^a-zA-Z0-9\s.,;:()\-]/g, ' ')).join(' ');
+        } else {
+          // Fallback: clean raw ASCII printable characters
+          extractedText = rawContent.replace(/[^\x20-\x7E\s]/g, ' ');
+        }
+
+        // Filter readable words
+        const readableWords = extractedText
+          .replace(/\s+/g, ' ')
+          .trim()
+          .split(/\s+/)
+          .filter((w) => w.length > 2 && /^[a-zA-Z0-9_-]+$/.test(w));
+
+        if (readableWords.length >= 15) {
+          setDocumentText(readableWords.join(' '));
+        } else {
+          // Mark as empty text so scanned/unreadable PDF is rejected
+          setDocumentText('');
+        }
+      } else {
+        // Plain text / JSON / CSV
+        setDocumentText(rawContent);
+      }
     };
+
     reader.onerror = () => {
-      setDocumentText(`Statistical Guideline Document: ${file.name}`);
+      setDocumentText('');
     };
+
     reader.readAsText(file);
   };
 
@@ -114,7 +149,7 @@ export const DocumentIntelligenceModal: React.FC = () => {
 
   const handleProcessDocument = async () => {
     if (!documentText.trim()) {
-      showNotification('Document Required', 'Please select or upload a document first.', 'warning');
+      showNotification('Extraction Failed', 'Text could not be extracted from this PDF.', 'warning');
       return;
     }
 
@@ -138,7 +173,7 @@ export const DocumentIntelligenceModal: React.FC = () => {
           'success'
         );
       } else {
-        showNotification('Processing Notice', res.message || 'Generated assessment with domain fallback.', 'info');
+        showNotification('Extraction Warning', res.message || 'Text could not be extracted from this PDF.', 'warning');
       }
     } catch (err) {
       console.error('Failed to summarize document:', err);

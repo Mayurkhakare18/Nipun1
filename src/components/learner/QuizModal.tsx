@@ -250,6 +250,12 @@ export const QuizModal: React.FC = () => {
               <div className="w-8 h-8 border-3 border-[#002147] border-t-transparent rounded-full animate-spin" />
               <span className="font-semibold text-xs text-[#002147]">Generating fresh adaptive questions from official statistical syllabus...</span>
             </div>
+          ) : isSubmitting ? (
+            <div className="p-16 text-center text-sm text-[#44474e] flex flex-col items-center justify-center gap-3">
+              <div className="w-8 h-8 border-3 border-[#fe9832] border-t-transparent rounded-full animate-spin" />
+              <span className="font-bold text-sm text-[#002147]">Calculating your result...</span>
+              <span className="text-xs text-[#74777f]">Evaluating responses and calculating competency level upgrade...</span>
+            </div>
           ) : quizResult && assessment ? (
             /* Interactive Quiz Result Summary & Recommendation Engine */
             <QuizResultSummaryView
