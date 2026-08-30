@@ -1241,8 +1241,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const initSession = useCallback(async () => {
     setIsLoading(true);
     try {
-      // 0. Check if returning from Google OAuth 2.0 redirect
-      if (typeof window !== 'undefined' && window.location.hash.includes('access_token=')) {
+      // 0. Check if returning from Google OAuth redirect or hash token
+      if (typeof window !== 'undefined' && (window.location.hash.includes('access_token=') || window.location.search.includes('apiKey='))) {
         try {
           const { user } = await firebaseService.signInWithGoogle();
           if (user) {
