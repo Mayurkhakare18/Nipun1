@@ -2857,20 +2857,25 @@ var init_catalogue_service = __esm({
 });
 
 // server/ai/gemini.ts
-import { GoogleGenAI } from "@google/genai";
-function getGenAI() {
+async function getGenAI() {
   if (Date.now() - lastQuotaExhaustedTime < QUOTA_COOLDOWN_MS) {
     return null;
   }
   if (!genAIClient && process.env.GEMINI_API_KEY) {
-    genAIClient = new GoogleGenAI({
-      apiKey: process.env.GEMINI_API_KEY,
-      httpOptions: {
-        headers: {
-          "User-Agent": "aistudio-build"
+    try {
+      const { GoogleGenAI } = await import("@google/genai");
+      genAIClient = new GoogleGenAI({
+        apiKey: process.env.GEMINI_API_KEY,
+        httpOptions: {
+          headers: {
+            "User-Agent": "aistudio-build"
+          }
         }
-      }
-    });
+      });
+    } catch (err) {
+      console.warn("[GEMINI_INIT_WARN] Could not initialize GoogleGenAI client:", err?.message || String(err));
+      return null;
+    }
   }
   return genAIClient;
 }
@@ -2878,7 +2883,7 @@ async function summarizeDocumentAndGenerateQuestions(params) {
   const comp = params.competency || "Official Statistics & Survey Methodology";
   const diff = params.difficulty || "Medium";
   const qCount = params.questionCount || 5;
-  const ai = getGenAI();
+  const ai = await getGenAI();
   if (ai) {
     try {
       const prompt = `You are an expert AI Statistical Methodologist and Capacity Building Specialist for the Ministry of Statistics & Programme Implementation (MoSPI), Government of India.
@@ -3088,7 +3093,7 @@ async function generateAIGapExplanation(params) {
   if (diagnosisCache.has(cacheKey)) {
     return diagnosisCache.get(cacheKey);
   }
-  const ai = getGenAI();
+  const ai = await getGenAI();
   if (ai) {
     try {
       const prompt = `You are the STATVIA AI Gap Intelligence Engine for India's Official Statistical System (MoSPI).
@@ -3167,7 +3172,7 @@ async function generateAIQuestionsFromContent(params) {
   if (questionsCache.has(cacheKey)) {
     return questionsCache.get(cacheKey);
   }
-  const ai = getGenAI();
+  const ai = await getGenAI();
   if (ai) {
     try {
       const prompt = `You are the STATVIA AI Assessment Generator for India's Official Statistical System.
@@ -3333,7 +3338,7 @@ CORE BEHAVIOR:
 2. For coding/statistical queries (Python, pandas, R, SQL, survey multiplier weights, SDC, CAPI validation), provide clean, production-ready code examples and explanations.
 3. For career progression and learning queries, explain how iGOT Karmayogi micro-modules, STATVIA interactive simulation labs, and NSSTA Greater Noida residential programmes help bridge their specific competency gaps and improve APAR/SPARROW readiness.
 4. Keep the tone respectful, official yet conversational, and format responses with clean markdown headers and bullet points.`;
-  const ai = getGenAI();
+  const ai = await getGenAI();
   if (ai) {
     try {
       const contents = [];

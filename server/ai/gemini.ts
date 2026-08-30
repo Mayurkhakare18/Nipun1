@@ -1,25 +1,30 @@
-import { GoogleGenAI } from '@google/genai';
 import type { QuizQuestion } from '../../src/types.js';
 
-let genAIClient: GoogleGenAI | null = null;
+let genAIClient: any = null;
 let lastQuotaExhaustedTime = 0;
 const QUOTA_COOLDOWN_MS = 60000; // 60s cooldown if 429 quota hit
 
-function getGenAI(): GoogleGenAI | null {
+async function getGenAI(): Promise<any> {
   // If recent 429 quota error occurred within cooldown window, skip remote call
   if (Date.now() - lastQuotaExhaustedTime < QUOTA_COOLDOWN_MS) {
     return null;
   }
 
   if (!genAIClient && process.env.GEMINI_API_KEY) {
-    genAIClient = new GoogleGenAI({
-      apiKey: process.env.GEMINI_API_KEY,
-      httpOptions: {
-        headers: {
-          'User-Agent': 'aistudio-build',
+    try {
+      const { GoogleGenAI } = await import('@google/genai');
+      genAIClient = new GoogleGenAI({
+        apiKey: process.env.GEMINI_API_KEY,
+        httpOptions: {
+          headers: {
+            'User-Agent': 'aistudio-build',
+          },
         },
-      },
-    });
+      });
+    } catch (err: any) {
+      console.warn('[GEMINI_INIT_WARN] Could not initialize GoogleGenAI client:', err?.message || String(err));
+      return null;
+    }
   }
   return genAIClient;
 }
@@ -150,7 +155,7 @@ export async function summarizeDocumentAndGenerateQuestions(params: {
   const diff = params.difficulty || 'Medium';
   const qCount = params.questionCount || 5;
 
-  const ai = getGenAI();
+  const ai = await getGenAI();
   if (ai) {
     try {
       const prompt = `You are an expert AI Statistical Methodologist and Capacity Building Specialist for the Ministry of Statistics & Programme Implementation (MoSPI), Government of India.
@@ -374,7 +379,7 @@ export async function generateAIGapExplanation(params: {
     return diagnosisCache.get(cacheKey)!;
   }
 
-  const ai = getGenAI();
+  const ai = await getGenAI();
   if (ai) {
     try {
       const prompt = `You are the STATVIA AI Gap Intelligence Engine for India's Official Statistical System (MoSPI).
@@ -473,7 +478,7 @@ export async function generateAIQuestionsFromContent(params: {
     return questionsCache.get(cacheKey)!;
   }
 
-  const ai = getGenAI();
+  const ai = await getGenAI();
   if (ai) {
     try {
       const prompt = `You are the STATVIA AI Assessment Generator for India's Official Statistical System.
@@ -668,7 +673,7 @@ CORE BEHAVIOR:
 3. For career progression and learning queries, explain how iGOT Karmayogi micro-modules, STATVIA interactive simulation labs, and NSSTA Greater Noida residential programmes help bridge their specific competency gaps and improve APAR/SPARROW readiness.
 4. Keep the tone respectful, official yet conversational, and format responses with clean markdown headers and bullet points.`;
 
-  const ai = getGenAI();
+  const ai = await getGenAI();
   if (ai) {
     try {
       // Build multi-turn contents
