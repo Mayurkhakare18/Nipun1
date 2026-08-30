@@ -31,12 +31,13 @@ import { api } from './api.js';
 
 // Initialize Firebase App
 const firebaseConfig = {
-  projectId: firebaseConfigJson.projectId,
-  appId: firebaseConfigJson.appId,
-  apiKey: firebaseConfigJson.apiKey,
-  authDomain: firebaseConfigJson.authDomain,
-  storageBucket: firebaseConfigJson.storageBucket,
-  messagingSenderId: firebaseConfigJson.messagingSenderId,
+  apiKey: firebaseConfigJson.apiKey || 'AIzaSyC_Pw4R-rEeWK2Ca81TLcgcb7ebDo_G7Bg',
+  authDomain: firebaseConfigJson.authDomain || 'nipun-17a88.firebaseapp.com',
+  projectId: firebaseConfigJson.projectId || 'nipun-17a88',
+  storageBucket: firebaseConfigJson.storageBucket || 'nipun-17a88.firebasestorage.app',
+  messagingSenderId: firebaseConfigJson.messagingSenderId || '1073316888953',
+  appId: firebaseConfigJson.appId || '1:1073316888953:web:3b4eedb8e3c3f8f9b96fa8',
+  measurementId: firebaseConfigJson.measurementId || 'G-F7W56D3ENY',
 };
 
 let app: FirebaseApp;
@@ -50,9 +51,9 @@ export const auth: Auth = getAuth(app);
 export const googleProvider = new GoogleAuthProvider();
 googleProvider.setCustomParameters({ prompt: 'select_account' });
 
-// Initialize Firestore with custom database ID if available
-export const firestore: Firestore = firebaseConfigJson.firestoreDatabaseId
-  ? getFirestore(app, firebaseConfigJson.firestoreDatabaseId)
+// Initialize Firestore
+export const firestore: Firestore = (firebaseConfigJson as any).firestoreDatabaseId
+  ? getFirestore(app, (firebaseConfigJson as any).firestoreDatabaseId)
   : getFirestore(app);
 
 /**
@@ -88,7 +89,7 @@ export const firebaseService = {
   },
 
   /**
-   * Pure Firebase Google Sign-In (Popup & Redirect via https://optimum-stone-1q6d2.firebaseapp.com/__/auth/handler)
+   * Pure Firebase Google Sign-In (Popup & Redirect via https://nipun-17a88.firebaseapp.com/__/auth/handler)
    */
   async signInWithGoogle(): Promise<{ user: UserProfile; firebaseUser?: FirebaseUser }> {
     try {
@@ -343,5 +344,12 @@ export const firebaseService = {
     } catch (error) {
       console.error('[Firebase] Sign out error:', error);
     }
+  },
+
+  /**
+   * Listen for Firebase Auth state changes
+   */
+  onAuthStateChanged(callback: (user: FirebaseUser | null) => void): () => void {
+    return onAuthStateChanged(auth, callback);
   },
 };
