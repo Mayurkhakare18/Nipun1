@@ -1,9 +1,9 @@
-import type { LearningCatalogueItem, LearningSource, UnifiedRecommendation, LearningPath, LearningPathItem, CompetencyLevel } from '../../src/types.ts';
-import { MOCK_IGOT_COURSES } from './igot/igot.mock.ts';
-import { MOCK_NSSTA_PROGRAMMES } from './nssta/nssta.mock.ts';
-import { igotAdapter } from './igot/igot.client.ts';
-import { nsstaAdapter } from './nssta/nssta.client.ts';
-import { tpacAdapter } from './tpac/tpac.client.ts';
+import type { LearningCatalogueItem, LearningSource, UnifiedRecommendation, LearningPath, LearningPathItem, CompetencyLevel } from '../../src/types.js';
+import { MOCK_IGOT_COURSES } from './igot/igot.mock.js';
+import { MOCK_NSSTA_PROGRAMMES } from './nssta/nssta.mock.js';
+import { igotAdapter } from './igot/igot.client.js';
+import { nsstaAdapter } from './nssta/nssta.client.js';
+import { tpacAdapter } from './tpac/tpac.client.js';
 
 export const UNIFIED_CATALOGUE_DATASET: LearningCatalogueItem[] = [
   // ==========================================

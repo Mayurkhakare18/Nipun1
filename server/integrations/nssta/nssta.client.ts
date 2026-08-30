@@ -1,6 +1,6 @@
-import type { NSSTAProgramme } from '../../../src/types.ts';
-import type { NSSTAAdapter } from './nssta.types.ts';
-import { MOCK_NSSTA_PROGRAMMES } from './nssta.mock.ts';
+import type { NSSTAProgramme } from '../../../src/types.js';
+import type { NSSTAAdapter } from './nssta.types.js';
+import { MOCK_NSSTA_PROGRAMMES } from './nssta.mock.js';
 
 export class NSSTAClient implements NSSTAAdapter {
   private isConfigured: boolean;

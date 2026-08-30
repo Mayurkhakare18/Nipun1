@@ -3,22 +3,22 @@ import pg from 'pg';
 
 const expressFn = (express as any).default || express;
 
-import { db } from './db.ts';
-import { igotAdapter } from './integrations/igot/igot.client.ts';
-import { nsstaAdapter } from './integrations/nssta/nssta.client.ts';
-import { tpacAdapter } from './integrations/tpac/tpac.client.ts';
-import { UnifiedCatalogueService } from './integrations/catalogue.service.ts';
+import { db } from './db.js';
+import { igotAdapter } from './integrations/igot/igot.client.js';
+import { nsstaAdapter } from './integrations/nssta/nssta.client.js';
+import { tpacAdapter } from './integrations/tpac/tpac.client.js';
+import { UnifiedCatalogueService } from './integrations/catalogue.service.js';
 import {
   generateAIGapDiagnosis,
   generateAIQuestionsFromContent,
   summarizeDocumentAndGenerateQuestions,
   generateAIMentorResponse,
-} from './ai/gemini.ts';
+} from './ai/gemini.js';
 import {
   fetchLearnerProfileCompetencyData,
   recalibrateLearnerGaps,
   recalculateGapsSynchronous,
-} from './utils/learnerProfileCompetency.ts';
+} from './utils/learnerProfileCompetency.js';
 import type {
   UserProfile,
   CompetencyLevel,
@@ -28,14 +28,14 @@ import type {
   LearnerCompetency,
   GapAnalysisResult,
   CompetencyUpgradeRecord,
-} from '../src/types.ts';
+} from '../src/types.js';
 
 const Pool = (pg as any).Pool || (pg as any).default?.Pool || pg;
 
 import {
   normalizeDatabaseUrl,
   getPostgresPoolConfig,
-} from './utils/db-url.ts';
+} from './utils/db-url.js';
 
 export { normalizeDatabaseUrl };
 
