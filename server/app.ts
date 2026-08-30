@@ -1,4 +1,5 @@
-import express from 'express';
+import expressPkg from 'express';
+const express = (expressPkg as any).default || expressPkg;
 import pg from 'pg';
 import { db } from './db.js';
 import { igotAdapter } from './integrations/igot/igot.client.js';

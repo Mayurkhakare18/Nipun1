@@ -1,5 +1,5 @@
 // server/app.ts
-import express from "express";
+import expressPkg from "express";
 import pg from "pg";
 
 // server/db.ts
@@ -3761,6 +3761,7 @@ function getPostgresPoolConfig(rawUrl) {
 }
 
 // server/app.ts
+var express = expressPkg.default || expressPkg;
 var Pool = pg.Pool || pg.default?.Pool || pg;
 var dbHealthPool = null;
 function getDbHealthPool() {
