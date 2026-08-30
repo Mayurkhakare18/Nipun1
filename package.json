@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "tsx server.ts",
-    "build": "vite build && esbuild api/index.ts --bundle --platform=node --format=esm --packages=external --outfile=api/index.js && esbuild api/health/db.ts --bundle --platform=node --format=esm --packages=external --outfile=api/health/db.js && esbuild api/health.ts --bundle --platform=node --format=esm --packages=external --outfile=api/health.js && esbuild api/[...all].ts --bundle --platform=node --format=esm --packages=external --outfile=\"api/[...all].js\"",
+    "build": "vite build && esbuild server/app.ts --bundle --platform=node --format=esm --packages=external --outfile=server/app.js && esbuild api/index.ts --bundle --platform=node --format=esm --packages=external --outfile=api/index.js && esbuild api/health/db.ts --bundle --platform=node --format=esm --packages=external --outfile=api/health/db.js && esbuild api/health.ts --bundle --platform=node --format=esm --packages=external --outfile=api/health.js && esbuild api/[...all].ts --bundle --platform=node --format=esm --packages=external --outfile=\"api/[...all].js\"",
     "start": "node api/index.js",
     "clean": "rm -rf dist server.js",
     "lint": "tsc --noEmit"
