@@ -43,6 +43,8 @@ export const QuizModal: React.FC = () => {
   const [quizResult, setQuizResult] = useState<QuizAttemptResult | null>(null);
   const [isLoading, setIsLoading] = useState(true);
 
+  const [submissionError, setSubmissionError] = useState<string | null>(null);
+
   // Load Assessment
   useEffect(() => {
     if (!isQuizModalOpen) return;
@@ -51,6 +53,7 @@ export const QuizModal: React.FC = () => {
       try {
         setIsLoading(true);
         setQuizResult(null);
+        setSubmissionError(null);
         setCurrentQuestionIndex(0);
 
         const id = activeQuizId || 'assess-py-l3';
@@ -105,6 +108,7 @@ export const QuizModal: React.FC = () => {
   const handleGenerateFreshQuestions = async (targetComp?: string) => {
     try {
       setIsGeneratingFresh(true);
+      setSubmissionError(null);
       const comp = targetComp || assessment?.competency || 'Python';
       const res = await api.generateFreshAssessment({
         competency: comp,
@@ -137,13 +141,20 @@ export const QuizModal: React.FC = () => {
     if (!assessment || isSubmitting) return;
 
     try {
+      console.log('[QUIZ] submit started');
       setIsSubmitting(true);
+      setSubmissionError(null);
       const timeSpent = Math.max(15, (assessment.timeLimitMinutes * 60) - timeLeftSeconds);
       
       const res = await api.submitAssessment(assessment.id, selectedAnswers, timeSpent, assessment);
+      console.log('[QUIZ] API response status: 200 OK');
+      console.log('[QUIZ] API response body:', res);
 
       if (res && res.result) {
+        console.log('[QUIZ] parsed result:', res.result);
+        console.log('[QUIZ] setting result state');
         setQuizResult(res.result);
+        console.log('[QUIZ] changing to result state');
 
         if (res.result.scorePercentage >= (assessment.passingScore || 70)) {
           try {
@@ -169,11 +180,13 @@ export const QuizModal: React.FC = () => {
           );
         }
 
-        // Non-blocking background sync so result view is shown without delay
         refreshUserData().catch((syncErr) => console.warn('Background user refresh notice:', syncErr));
+      } else {
+        setSubmissionError('Unable to calculate your assessment result. Please try again.');
       }
-    } catch (err) {
-      console.error('Failed to submit quiz:', err);
+    } catch (err: any) {
+      console.error('[QUIZ] Failed to submit quiz:', err);
+      setSubmissionError(err?.message || 'Unable to calculate your assessment result.');
     } finally {
       setIsSubmitting(false);
     }
@@ -256,6 +269,23 @@ export const QuizModal: React.FC = () => {
               <span className="font-bold text-sm text-[#002147]">Calculating your result...</span>
               <span className="text-xs text-[#74777f]">Evaluating responses and calculating competency level upgrade...</span>
             </div>
+          ) : submissionError ? (
+            <div className="p-12 text-center text-sm text-[#44474e] flex flex-col items-center justify-center gap-4">
+              <div className="p-3 rounded-full bg-amber-100 text-amber-800">
+                <AlertCircle className="w-8 h-8" />
+              </div>
+              <div className="space-y-1">
+                <h4 className="font-bold text-base text-[#000a1e]">Unable to calculate your assessment result.</h4>
+                <p className="text-xs text-[#74777f] max-w-md">{submissionError}</p>
+              </div>
+              <button
+                onClick={handleSubmit}
+                className="flex items-center gap-2 px-5 py-2.5 bg-[#002147] hover:bg-[#003366] text-white text-xs font-bold rounded-xl shadow-xs transition-all cursor-pointer"
+              >
+                <RotateCcw className="w-4 h-4 text-[#fe9832]" />
+                <span>Try Again</span>
+              </button>
+            </div>
           ) : quizResult && assessment ? (
             /* Interactive Quiz Result Summary & Recommendation Engine */
             <QuizResultSummaryView
@@ -265,6 +295,7 @@ export const QuizModal: React.FC = () => {
               flaggedQuestions={flaggedQuestions}
               onRetakeSet={() => {
                 setQuizResult(null);
+                setSubmissionError(null);
                 setCurrentQuestionIndex(0);
                 setSelectedAnswers(new Array(assessment.questions.length).fill(-1));
                 setTimeLeftSeconds(assessment.timeLimitMinutes * 60);

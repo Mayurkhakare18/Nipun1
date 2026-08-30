@@ -474,12 +474,12 @@ export const QuizResultSummaryView: React.FC<QuizResultSummaryViewProps> = ({
                   <p className="text-xs text-[#74777f]">Empirical performance across syllabus domains</p>
                 </div>
                 <span className="text-xs font-mono font-bold text-[#002147]">
-                  {quizResult.topicScores.length} Tested Topics
+                  {(quizResult?.topicScores || []).length} Tested Topics
                 </span>
               </div>
 
               <div className="space-y-3">
-                {quizResult.topicScores.map((t, idx) => {
+                {(quizResult?.topicScores || []).map((t, idx) => {
                   const topicPercentage = Math.round((t.score / (t.total || 1)) * 100);
                   const isMastered = topicPercentage >= 70;
 

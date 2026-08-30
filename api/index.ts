@@ -354,17 +354,36 @@ export default async function handler(req: any, res: any) {
     if (method === 'POST' && (pathname === '/api/assessments/submit' || pathname === '/assessments/submit')) {
       const user = resolveUser(req);
       const body = await parseJsonBody(req);
-      const { assessmentId, answers = [] } = body;
+      const { assessmentId, answers = [], timeSpentSeconds = 120, questions: reqQuestions } = body;
       let assessment = db.state.assessments.find((a) => a.id === assessmentId) || db.state.assessments[0];
+      const questionsList = (Array.isArray(reqQuestions) && reqQuestions.length > 0) ? reqQuestions : assessment.questions;
+      
       let correctCount = 0;
-      assessment.questions.forEach((q: any, idx: number) => {
-        if (answers[idx] === q.correctAnswer || (answers[idx] && answers[idx].selectedOption === q.correctAnswer)) {
+      const topicMap: Record<string, { correct: number; total: number }> = {};
+
+      questionsList.forEach((q: any, idx: number) => {
+        const topic = q.topic || `${assessment.competency} Core`;
+        if (!topicMap[topic]) topicMap[topic] = { correct: 0, total: 0 };
+        topicMap[topic].total += 1;
+
+        const ans = answers[idx];
+        const isUserCorrect = typeof ans === 'number' ? ans === q.correctAnswer : (ans && ans.selectedOption === q.correctAnswer);
+        if (isUserCorrect) {
           correctCount++;
+          topicMap[topic].correct += 1;
         }
       });
-      const totalQ = Math.max(1, assessment.questions.length);
+
+      const totalQ = Math.max(1, questionsList.length);
       const scorePercentage = Math.round((correctCount / totalQ) * 100);
-      const passed = scorePercentage >= assessment.passingScore;
+      const passingScore = assessment.passingScore || 70;
+      const passed = scorePercentage >= passingScore;
+
+      const topicScores = Object.entries(topicMap).map(([topic, data]) => ({
+        topic,
+        score: data.correct,
+        total: data.total,
+      }));
 
       const result = {
         assessmentId: assessment.id,
@@ -373,13 +392,22 @@ export default async function handler(req: any, res: any) {
         totalQuestions: totalQ,
         correctAnswersCount: correctCount,
         incorrectAnswersCount: totalQ - correctCount,
+        timeSpentSeconds: Number(timeSpentSeconds) || 120,
         passed,
-        passingScore: assessment.passingScore,
+        passingScore,
+        topicScores: topicScores.length > 0 ? topicScores : [{ topic: `${assessment.competency} Core`, score: correctCount, total: totalQ }],
         aiConclusion: passed
-          ? `Validated mastery in ${assessment.competency}. Score ${scorePercentage}% meets operational threshold.`
-          : `Score ${scorePercentage}% is below ${assessment.passingScore}% threshold. Further study recommended.`,
+          ? `Validated mastery in ${assessment.competency}. Score ${scorePercentage}% meets operational threshold. Verified level upgrade applied in Competency Passport.`
+          : `Score ${scorePercentage}% is below ${passingScore}% threshold. Targeted learning recommendations provided.`,
+        updatedCompetencyLevel: passed ? 3 : 2,
+        competencyGapReduced: passed,
+        recommendedRevision: passed ? [] : [`${assessment.competency} Foundations`, 'MoSPI Standard Guidelines'],
         completedAt: new Date().toISOString(),
       };
+
+      if (!(db.state as any).assessmentAttempts) (db.state as any).assessmentAttempts = [];
+      (db.state as any).assessmentAttempts.push(result);
+
       return res.status(200).json({ success: true, result });
     }
 

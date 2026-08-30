@@ -606,17 +606,35 @@ export const api = {
       }
     );
 
-    if (!res.success || !res.result) {
-      return {
-        success: true,
-        result: fallbackResult,
-        upgradeRecord: res.upgradeRecord,
-        competencies: res.competencies,
-        gaps: res.gaps,
-      };
-    }
+    const rawResult = res.result || fallbackResult;
+    const normalizedResult: QuizAttemptResult = {
+      ...fallbackResult,
+      ...rawResult,
+      topicScores: (Array.isArray(rawResult.topicScores) && rawResult.topicScores.length > 0)
+        ? rawResult.topicScores
+        : fallbackResult.topicScores,
+      timeSpentSeconds: typeof rawResult.timeSpentSeconds === 'number'
+        ? rawResult.timeSpentSeconds
+        : fallbackResult.timeSpentSeconds,
+      updatedCompetencyLevel: typeof rawResult.updatedCompetencyLevel === 'number'
+        ? rawResult.updatedCompetencyLevel
+        : fallbackResult.updatedCompetencyLevel,
+      competencyGapReduced: typeof rawResult.competencyGapReduced === 'boolean'
+        ? rawResult.competencyGapReduced
+        : fallbackResult.competencyGapReduced,
+      recommendedRevision: Array.isArray(rawResult.recommendedRevision)
+        ? rawResult.recommendedRevision
+        : fallbackResult.recommendedRevision,
+      aiConclusion: rawResult.aiConclusion || fallbackResult.aiConclusion,
+    };
 
-    return res;
+    return {
+      success: true,
+      result: normalizedResult,
+      upgradeRecord: res.upgradeRecord,
+      competencies: res.competencies,
+      gaps: res.gaps,
+    };
   },
 
   // Trainer Document Processing
