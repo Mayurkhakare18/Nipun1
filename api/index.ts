@@ -1,4 +1,17 @@
-import { app } from '../server/app';
+let appInstance: any = null;
+
+async function getAppInstance() {
+  if (!appInstance) {
+    try {
+      const mod = await import('../server/app');
+      appInstance = mod.app || mod.default;
+    } catch (err: any) {
+      console.error('[BOOT_ERROR] Failed to load server/app:', err?.stack || err?.message || String(err));
+      throw err;
+    }
+  }
+  return appInstance;
+}
 
 export default async function handler(req: any, res: any) {
   // CORS Headers
@@ -19,6 +32,8 @@ export default async function handler(req: any, res: any) {
   }
 
   try {
+    const app = await getAppInstance();
+
     // Reconstruct the exact original request URL for Express
     let originalPath = req.url || '/api';
     
@@ -56,15 +71,6 @@ export default async function handler(req: any, res: any) {
     const safePath = (req.url || '').split('?')[0];
     console.log(`[BOOT] Request received: ${req.method} ${safePath} (Full: ${req.url})`);
 
-    if (typeof app !== 'function') {
-      console.error('[BOOT] App is not a function:', typeof app);
-      return res.status(500).json({
-        success: false,
-        error: 'APP_NOT_A_FUNCTION',
-        message: `Express app export resolved as ${typeof app}`,
-      });
-    }
-
     return (app as any)(req, res);
   } catch (err: any) {
     console.error('Vercel Serverless Function Unhandled Error:', err?.stack || err?.message || String(err));
@@ -73,6 +79,7 @@ export default async function handler(req: any, res: any) {
         success: false,
         error: 'SERVERLESS_FUNCTION_ERROR',
         message: err?.message || String(err),
+        stack: err?.stack || String(err),
       });
     }
   }
