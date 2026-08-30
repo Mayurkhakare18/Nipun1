@@ -1,18 +1,18 @@
 import pg from 'pg';
-import { db } from '../server/db';
+import { db } from '../server/db.ts';
 import {
   generateAIGapDiagnosis,
   generateAIQuestionsFromContent,
   summarizeDocumentAndGenerateQuestions,
   generateAIMentorResponse,
-} from '../server/ai/gemini';
+} from '../server/ai/gemini.ts';
 import {
   fetchLearnerProfileCompetencyData,
   recalibrateLearnerGaps,
   recalculateGapsSynchronous,
-} from '../server/utils/learnerProfileCompetency';
-import { UnifiedCatalogueService } from '../server/integrations/catalogue.service';
-import { getPostgresPoolConfig } from '../server/utils/db-url';
+} from '../server/utils/learnerProfileCompetency.ts';
+import { UnifiedCatalogueService } from '../server/integrations/catalogue.service.ts';
+import { getPostgresPoolConfig } from '../server/utils/db-url.ts';
 
 const Pool = (pg as any).Pool || (pg as any).default?.Pool || pg;
 let healthPool: any = null;

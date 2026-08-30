@@ -1,5 +1,5 @@
-import { db } from '../db';
-import { generateAIGapDiagnosis } from '../ai/gemini';
+import { db } from '../db.ts';
+import { generateAIGapDiagnosis } from '../ai/gemini.ts';
 import type {
   UserProfile,
   LearnerCompetency,
