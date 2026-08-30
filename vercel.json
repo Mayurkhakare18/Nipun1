@@ -2,6 +2,14 @@
   "version": 2,
   "rewrites": [
     {
+      "source": "/api/health/db",
+      "destination": "/api/health/db"
+    },
+    {
+      "source": "/api/health",
+      "destination": "/api/health"
+    },
+    {
       "source": "/api/(.*)",
       "destination": "/api?__url=$1"
     },
@@ -11,3 +19,4 @@
     }
   ]
 }
+
