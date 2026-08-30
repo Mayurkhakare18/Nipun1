@@ -1,17 +1,4 @@
-let appInstance: any = null;
-
-async function getAppInstance() {
-  if (!appInstance) {
-    try {
-      const mod = await import('../server/app.js');
-      appInstance = mod.app || mod.default;
-    } catch (err: any) {
-      console.error('[BOOT_ERROR] Failed to load server/app.js:', err?.stack || err?.message || String(err));
-      throw err;
-    }
-  }
-  return appInstance;
-}
+import { app } from '../server/app.js';
 
 export default async function handler(req: any, res: any) {
   // CORS Headers
@@ -32,8 +19,6 @@ export default async function handler(req: any, res: any) {
   }
 
   try {
-    const app = await getAppInstance();
-
     // Reconstruct the exact original request URL for Express
     let originalPath = req.url || '/api';
     
