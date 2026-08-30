@@ -1,0 +1,82 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // Helper function to check if user is authenticated
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+    
+    // Helper to check if user is owner of the document
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+    
+    // User Profiles
+    match /users/{userId} {
+      allow read: if isAuthenticated();
+      allow write: if isOwner(userId) || isAuthenticated();
+    }
+    
+    // Learner Competencies
+    match /learnerCompetencies/{docId} {
+      allow read: if isAuthenticated();
+      allow write: if isAuthenticated();
+    }
+    
+    // Gap Analysis Records
+    match /gapAnalysis/{docId} {
+      allow read: if isAuthenticated();
+      allow write: if isAuthenticated();
+    }
+    
+    // Learning Paths
+    match /learningPaths/{docId} {
+      allow read: if isAuthenticated();
+      allow write: if isAuthenticated();
+    }
+    
+    // Standard Competencies catalog
+    match /competencies/{compDoc} {
+      allow read: if true;
+      allow write: if isAuthenticated();
+    }
+    
+    // Quiz Assessments & Questions
+    match /assessments/{assessDoc} {
+      allow read: if true;
+      allow write: if isAuthenticated();
+    }
+    
+    // Assessment Submission Attempts
+    match /quizAttempts/{attemptDoc} {
+      allow read: if isAuthenticated();
+      allow write: if isAuthenticated();
+    }
+    
+    // Uploaded Documents
+    match /documents/{docId} {
+      allow read: if isAuthenticated();
+      allow write: if isAuthenticated();
+    }
+    
+    // Audit Logs
+    match /auditLogs/{logDoc} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated();
+      allow update, delete: if false;
+    }
+
+    // Workforce Metrics
+    match /workforceMetrics/{metricDoc} {
+      allow read: if isAuthenticated();
+      allow write: if isAuthenticated();
+    }
+    
+    // Default fallback
+    match /{document=**} {
+      allow read: if isAuthenticated();
+      allow write: if isAuthenticated();
+    }
+  }
+}

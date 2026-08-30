@@ -1,0 +1,153 @@
+@import "tailwindcss";
+
+@theme {
+  --color-primary: #0f172a;
+  --color-on-primary: #ffffff;
+  --color-primary-container: #1e293b;
+  --color-on-primary-container: #94a3b8;
+  --color-primary-fixed: #e2e8f0;
+  --color-primary-fixed-dim: #cbd5e1;
+  --color-on-primary-fixed: #0f172a;
+  --color-on-primary-fixed-variant: #334155;
+  --color-inverse-primary: #94a3b8;
+
+  --color-secondary: #92400e;
+  --color-on-secondary: #ffffff;
+  --color-secondary-container: #d97706;
+  --color-on-secondary-container: #78350f;
+  --color-secondary-fixed: #fef3c7;
+  --color-secondary-fixed-dim: #fde68a;
+  --color-on-secondary-fixed: #451a03;
+  --color-on-secondary-fixed-variant: #78350f;
+
+  --color-tertiary: #1e293b;
+  --color-on-tertiary: #ffffff;
+  --color-tertiary-container: #334155;
+  --color-on-tertiary-container: #94a3b8;
+
+  --color-surface: #f4f6f8;
+  --color-surface-dim: #e2e8f0;
+  --color-surface-bright: #ffffff;
+  --color-surface-container-lowest: #ffffff;
+  --color-surface-container-low: #f8fafc;
+  --color-surface-container: #f1f5f9;
+  --color-surface-container-high: #e2e8f0;
+  --color-surface-container-highest: #cbd5e1;
+  --color-surface-variant: #e2e8f0;
+  --color-surface-tint: #334155;
+
+  --color-background: #f4f6f8;
+  --color-on-background: #0f172a;
+  --color-on-surface: #0f172a;
+  --color-on-surface-variant: #475569;
+  --color-inverse-surface: #1e293b;
+  --color-inverse-on-surface: #f8fafc;
+
+  --color-outline: #64748b;
+  --color-outline-variant: #cbd5e1;
+
+  --color-error: #b91c1c;
+  --color-on-error: #ffffff;
+  --color-error-container: #fee2e2;
+  --color-on-error-container: #7f1d1d;
+
+  --spacing-section-padding: 128px;
+  --spacing-margin-mobile: 24px;
+  --spacing-margin-desktop: 120px;
+  --spacing-gutter: 64px;
+
+  --font-headline-md: "Public Sans", sans-serif;
+  --font-headline-lg: "Public Sans", sans-serif;
+  --font-headline-sm: "Public Sans", sans-serif;
+  --font-display-sm: "Public Sans", sans-serif;
+  --font-display-lg: "Public Sans", sans-serif;
+  --font-display-lg-mobile: "Public Sans", sans-serif;
+  --font-body-lg: "Inter", sans-serif;
+  --font-body-md: "Inter", sans-serif;
+  --font-label-md: "Inter", sans-serif;
+  --font-label-sm: "Inter", sans-serif;
+}
+
+@layer utilities {
+  .text-headline-md {
+    font-size: 32px;
+    line-height: 40px;
+    font-weight: 600;
+  }
+  .text-headline-lg {
+    font-size: 40px;
+    line-height: 48px;
+    font-weight: 600;
+  }
+  .text-display-lg {
+    font-size: 64px;
+    line-height: 72px;
+    letter-spacing: -0.02em;
+    font-weight: 700;
+  }
+  .text-display-lg-mobile {
+    font-size: 40px;
+    line-height: 48px;
+    letter-spacing: -0.01em;
+    font-weight: 700;
+  }
+  .text-body-lg {
+    font-size: 18px;
+    line-height: 28px;
+    font-weight: 400;
+  }
+  .text-body-md {
+    font-size: 16px;
+    line-height: 24px;
+    font-weight: 400;
+  }
+  .text-label-md {
+    font-size: 14px;
+    line-height: 20px;
+    letter-spacing: 0.01em;
+    font-weight: 500;
+  }
+  .text-label-sm {
+    font-size: 12px;
+    line-height: 16px;
+    font-weight: 600;
+  }
+}
+
+.node-hover .tooltip {
+  opacity: 0;
+  visibility: hidden;
+  transition: all 0.2s ease;
+  transform: translateY(10px);
+}
+.node-hover:hover .tooltip {
+  opacity: 1;
+  visibility: visible;
+  transform: translateY(0);
+}
+.flow-line {
+  stroke-dasharray: 4;
+  animation: dash 20s linear infinite;
+}
+@keyframes dash {
+  to {
+    stroke-dashoffset: -100;
+  }
+}
+
+/* Custom Scrollbar for horizontal scrolling elements */
+.custom-scrollbar::-webkit-scrollbar {
+  height: 6px;
+  width: 6px;
+}
+.custom-scrollbar::-webkit-scrollbar-track {
+  background: transparent;
+}
+.custom-scrollbar::-webkit-scrollbar-thumb {
+  background: rgba(116, 119, 127, 0.2);
+  border-radius: 10px;
+}
+.custom-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: rgba(116, 119, 127, 0.4);
+}
+

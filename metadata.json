@@ -1,0 +1,6 @@
+{
+  "name": "NIPUN - National Statistical Competency & Capacity Building Platform",
+  "description": "NIPUN: National Initiative for Statistical Capacity Building & Competency Intelligence for MoSPI, NSSTA, and iGOT Karmayogi.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
