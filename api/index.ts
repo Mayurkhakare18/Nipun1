@@ -217,6 +217,66 @@ export default async function handler(req: any, res: any) {
       return res.status(201).json({ success: true, user: newUser, token: session.token });
     }
 
+    if (method === 'POST' && (pathname === '/api/auth/google-verify' || pathname === '/auth/google-verify')) {
+      const body = await parseJsonBody(req);
+      const { email, name, googleUid } = body;
+      if (!email) {
+        return res.status(400).json({ success: false, message: 'Google account email required.' });
+      }
+
+      const cleanEmail = String(email).trim().toLowerCase();
+      const displayName = name ? String(name).trim() : cleanEmail.split('@')[0];
+
+      let existingUser = Object.values(db.state.users).find((u: any) => u.email.toLowerCase() === cleanEmail || (googleUid && u.id === googleUid));
+
+      if (!existingUser) {
+        const newUserId = googleUid ? googleUid : `google-user-${Date.now()}`;
+        existingUser = {
+          id: newUserId,
+          name: displayName,
+          email: cleanEmail,
+          role: 'LEARNER',
+          employeeId: `ISS-GOOG-${Math.floor(1000 + Math.random() * 9000)}`,
+          ministry: 'Ministry of Statistics & Programme Implementation (MoSPI)',
+          department: 'National Accounts Division (NAD)',
+          organization: 'Government of India',
+          designation: 'Senior Statistical Officer',
+          currentRole: 'Senior Statistical Officer',
+          targetRole: 'Assistant Director / Lead Analyst',
+          level: 11,
+          cadre: 'Subordinate Statistical Service (SSS)',
+          yearsOfExperience: 5,
+          education: 'M.Sc. Statistics / Data Science',
+          specialization: 'Survey Sampling & Automated Pipelines',
+          location: 'New Delhi, Headquarters',
+          preferredLanguage: 'English / Hindi',
+          previousRoles: ['Junior Statistical Officer'],
+          currentProjects: ['PLFS Statistical Processing'],
+          technologiesUsed: ['Python', 'SQL', 'R'],
+          trainingHours: 24,
+          roleReadiness: 78,
+          verifiedSkillsCount: 12,
+          developingSkillsCount: 3,
+        };
+        db.state.users[newUserId] = existingUser;
+        db.registerUserCredential(newUserId, cleanEmail, 'GoogleAuthUser@2026');
+        if (!db.state.learnerCompetencies[newUserId]) {
+          db.state.learnerCompetencies[newUserId] = [...(db.state.learnerCompetencies['user-learner-01'] || [])];
+        }
+        if (!db.state.gapAnalysis[newUserId]) {
+          db.state.gapAnalysis[newUserId] = [...(db.state.gapAnalysis['user-learner-01'] || [])];
+        }
+      }
+
+      const session = db.createSession(existingUser.id);
+      return res.status(200).json({
+        success: true,
+        user: existingUser,
+        token: session.token,
+        message: `Welcome Officer ${existingUser.name}! Google session verified.`,
+      });
+    }
+
     if (method === 'POST' && pathname === '/api/auth/logout') {
       return res.status(200).json({ success: true, message: 'Logged out.' });
     }

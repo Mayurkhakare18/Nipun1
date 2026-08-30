@@ -25,6 +25,7 @@ import {
 } from 'firebase/firestore';
 import { UserProfile, LearnerCompetency, GapAnalysisResult, LearningPath } from '../types';
 import firebaseConfigJson from '../../firebase-applet-config.json';
+import { api } from './api.js';
 
 // Initialize Firebase App
 const firebaseConfig = {
@@ -62,111 +63,68 @@ export const firebaseService = {
   async signInWithGoogle(): Promise<{ user: UserProfile; firebaseUser?: FirebaseUser }> {
     try {
       let firebaseUser: FirebaseUser | null = null;
-      let profile: UserProfile | null = null;
+      let email: string | null = null;
+      let name: string | null = null;
+      let googleUid: string | null = null;
 
+      // 1. Try Firebase Popup Authentication
       try {
         const result = await signInWithPopup(auth, googleProvider);
         firebaseUser = result.user;
+        if (firebaseUser) {
+          email = firebaseUser.email;
+          name = firebaseUser.displayName;
+          googleUid = firebaseUser.uid;
+        }
       } catch (popupErr: any) {
         console.warn('[Firebase] Popup authentication notice:', popupErr?.code || popupErr?.message);
-        // If popup was blocked or unauthorized domain in sandbox preview, provide seamless authenticated Google session
       }
 
-      if (firebaseUser) {
-        const userDocRef = doc(firestore, 'users', firebaseUser.uid);
-        const userSnapshot = await getDoc(userDocRef);
-
-        if (userSnapshot.exists()) {
-          profile = userSnapshot.data() as UserProfile;
-        } else {
-          profile = {
-            id: firebaseUser.uid,
-            name: firebaseUser.displayName || 'Official Statistical Officer',
-            email: firebaseUser.email || 'officer@mospi.gov.in',
-            role: 'LEARNER',
-            employeeId: `GOI-STAT-${Math.floor(1000 + Math.random() * 9000)}`,
-            ministry: 'Ministry of Statistics & Programme Implementation (MoSPI)',
-            department: 'National Accounts Division (NAD)',
-            organization: 'Government of India',
-            designation: 'Senior Statistical Officer',
-            currentRole: 'Senior Statistical Officer',
-            targetRole: 'Assistant Director / Lead Analyst',
-            level: 11,
-            cadre: 'Subordinate Statistical Service (SSS)',
-            yearsOfExperience: 4,
-            education: 'Post Graduate in Statistics',
-            specialization: 'Survey Statistics & Applied Data Science',
-            location: 'New Delhi, Headquarters',
-            preferredLanguage: 'English / Hindi',
-            previousRoles: ['Junior Statistical Officer'],
-            currentProjects: ['Statistical Data Architecture & Modernization'],
-            technologiesUsed: ['Python', 'SQL', 'R Studio', 'CSPro'],
-            trainingHours: 12,
-            roleReadiness: 78,
-            verifiedSkillsCount: 10,
-            developingSkillsCount: 4,
-          };
-
-          try {
-            await setDoc(userDocRef, {
-              ...profile,
-              createdAt: serverTimestamp(),
-              updatedAt: serverTimestamp(),
-              authProvider: 'google',
-            });
-          } catch (writeErr) {
-            console.warn('[Firebase] Firestore profile sync note:', writeErr);
+      // 2. If Popup failed or blocked, check URL hash for Google OAuth 2.0 Implicit token
+      if (!email && typeof window !== 'undefined' && window.location.hash.includes('access_token=')) {
+        try {
+          const hashParams = new URLSearchParams(window.location.hash.replace('#', ''));
+          const accessToken = hashParams.get('access_token');
+          if (accessToken) {
+            const userInfoRes = await fetch(`https://www.googleapis.com/oauth2/v3/userinfo?access_token=${accessToken}`);
+            if (userInfoRes.ok) {
+              const userInfo = await userInfoRes.json();
+              email = userInfo.email;
+              name = userInfo.name || userInfo.given_name;
+              googleUid = userInfo.sub;
+              window.history.replaceState(null, '', window.location.pathname);
+            }
           }
+        } catch (hashErr) {
+          console.warn('[Google OAuth] Hash token extraction note:', hashErr);
         }
-
-        return { user: profile, firebaseUser };
       }
 
-      // Seamless fallback Google Account for sandbox/iframe environment
-      const fallbackGoogleId = 'google-user-' + Math.floor(100000 + Math.random() * 900000);
-      const fallbackProfile: UserProfile = {
-        id: fallbackGoogleId,
-        name: 'Google Officer User',
-        email: 'mayurkhakarec55@gmail.com',
-        role: 'LEARNER',
-        employeeId: `GOI-GOOGLE-${Math.floor(1000 + Math.random() * 9000)}`,
-        ministry: 'Ministry of Statistics and Programme Implementation (MoSPI)',
-        department: 'National Accounts Division (NAD)',
-        organization: 'Government of India',
-        designation: 'Senior Statistical Officer',
-        currentRole: 'Senior Statistical Officer',
-        targetRole: 'Assistant Director / Data Lead',
-        level: 11,
-        cadre: 'Subordinate Statistical Service (SSS)',
-        yearsOfExperience: 5,
-        education: 'M.Sc. Statistics / Economics',
-        specialization: 'Survey Methodology & Machine Learning Imputation',
-        location: 'New Delhi, Headquarters',
-        preferredLanguage: 'English / Hindi',
-        previousRoles: ['Statistical Investigator', 'Junior Statistical Officer'],
-        currentProjects: ['National Sample Survey Modernization', 'PLFS Automated Data Pipeline'],
-        technologiesUsed: ['Python', 'SQL', 'R', 'CSPro', 'PowerBI'],
-        trainingHours: 24,
-        roleReadiness: 80,
-        verifiedSkillsCount: 12,
-        developingSkillsCount: 3,
-      };
-
-      try {
-        const userDocRef = doc(firestore, 'users', fallbackGoogleId);
-        await setDoc(userDocRef, {
-          ...fallbackProfile,
-          createdAt: serverTimestamp(),
-          updatedAt: serverTimestamp(),
-          authProvider: 'google',
+      // 3. If real Google credentials were obtained, verify with NIPUN backend
+      if (email) {
+        const backendRes = await api.googleVerify({
+          email,
+          name: name || email.split('@')[0],
+          googleUid: googleUid || undefined,
         });
-      } catch (fsErr) {
-        console.warn('[Firebase] Fallback firestore write note:', fsErr);
+
+        if (backendRes.success && backendRes.user) {
+          return { user: backendRes.user, firebaseUser: firebaseUser || undefined };
+        }
       }
 
-      return { user: fallbackProfile };
+      // 4. Direct Google OAuth 2.0 Authorization Server Redirect
+      if (typeof window !== 'undefined') {
+        const clientId = firebaseConfigJson.oAuthClientId || '946189640461-49aqr0kegmsuk20asatus8stv2lnr2o0.apps.googleusercontent.com';
+        const redirectUri = encodeURIComponent(window.location.origin);
+        const googleAuthUrl = `https://accounts.google.com/o/oauth2/v2/auth?client_id=${clientId}&redirect_uri=${redirectUri}&response_type=token&scope=email%20profile&prompt=select_account`;
+        window.location.href = googleAuthUrl;
+        return new Promise(() => {}) as any; // Pending navigation to Google OAuth screen
+      }
+
+      throw new Error('Google Authentication process could not be completed.');
     } catch (error: any) {
-      console.error('[Firebase] Google sign-in processing error:', error);
+      console.error('[Firebase/Google] Authentication processing error:', error);
       throw error;
     }
   },

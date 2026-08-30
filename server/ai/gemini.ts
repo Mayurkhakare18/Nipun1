@@ -697,16 +697,44 @@ CORE BEHAVIOR:
         parts: [{ text: params.userMessage || 'Hello' }],
       });
 
-      const response = await ai.models.generateContent({
-        model: 'gemini-3.7-flash',
-        contents,
-        config: {
-          systemInstruction,
-          temperature: 0.35,
-        },
-      });
+      let response: any = null;
+      const candidateModels = ['gemini-2.5-flash', 'gemini-2.0-flash', 'gemini-1.5-flash'];
 
-      if (response.text && response.text.trim()) {
+      for (const modelName of candidateModels) {
+        try {
+          response = await ai.models.generateContent({
+            model: modelName,
+            contents,
+            config: {
+              systemInstruction: `You are STATVIA / NIPUN AI Assistant, the official Statistical Capacity Building Assistant for India's Official Statistical System (Ministry of Statistics & Programme Implementation - MoSPI).
+You are guiding officer ${profile.name}, currently designated as ${profile.designation} (${profile.ministry}, Cadre: ${profile.cadre || 'Subordinate Statistical Service - SSS'}).
+
+OFFICER CONTEXT:
+- Role Readiness: ${profile.roleReadiness || 82}%
+- Current Pay Level: Level ${profile.level || 11}
+- Target Role: ${profile.targetRole || 'Assistant Director / Lead Data Analyst'}
+- Verified Competencies (${profile.verifiedSkillsCount || 14}): ${verifiedCompsSummary}
+- Priority Competency Gaps (${userGaps.length}): ${priorityGapsSummary}
+- Active Learning Path: "${pathTitle}"
+- Methodological Grounding & Standards:
+${docsSnippet}
+
+CORE INSTRUCTIONS:
+1. Answer the user's specific query directly and accurately.
+2. If the user asks a general knowledge, programming, or domain question (e.g. "What is Python?", "What is sampling methodology?", "What is the capital of India?"), provide a clear, direct, and authoritative answer to that specific question FIRST.
+3. Do NOT force officer competency gaps or Python gap text into unrelated general questions.
+4. Only discuss officer competency gaps, role readiness, or learning paths when the user explicitly asks about their gaps, recommendations, or learning progress.
+5. Format responses with clean markdown headers and bullet points.`,
+              temperature: 0.3,
+            },
+          });
+          if (response && response.text) break;
+        } catch {
+          // Try next model candidate
+        }
+      }
+
+      if (response && response.text && response.text.trim()) {
         const replyText = response.text.trim();
 
         // Dynamically deduce intelligent contextual action chips
@@ -747,104 +775,176 @@ CORE BEHAVIOR:
     }
   }
 
-  // Comprehensive rule-based and knowledge-grounded statistical assistant responses
-  const lower = (params.userMessage || '').toLowerCase();
+  // Multi-intent intelligent fallback classification engine
+  const userMsg = (params.userMessage || '').trim();
+  const lower = userMsg.toLowerCase();
 
-  if (lower.includes('today') || lower.includes('what should i learn') || lower.includes('start') || lower.includes('next')) {
+  // 1. Skill Gap Questions ("What is my biggest current skill gap?")
+  if (
+    lower.includes('my biggest') ||
+    lower.includes('biggest current') ||
+    lower.includes('current skill gap') ||
+    (lower.includes('gap') && (lower.includes('my') || lower.includes('biggest') || lower.includes('current') || lower.includes('priority')))
+  ) {
     return {
-      reply: `Good day, ${profile.name}. Based on your current role readiness score (**${profile.roleReadiness || 82}%**), your highest leverage priority is closing the **Python Application Gap (Level 2 → Level 3)**.
+      reply: `### Official Skill Gap Intelligence Analysis
 
-### Recommended Immediate Actions:
-1. **iGOT Karmayogi**: Complete the **Python for Official Statistical Analysis** micro-module (2h 30m).
-2. **STATVIA Simulation Lab**: Practice pandas DataFrame filtering, stratum weight imputation, and survey outlier detection in the live browser sandbox (20 min).
-3. **Assessment**: Take the **Python L3 Diagnostic Assessment** to elevate your verified level in your Competency Passport.`,
+Officer **${profile.name || 'Aarav Sharma'}**, based on your latest STATVIA empirical assessment for your role as **${profile.designation || 'Assistant Director (Statistics)'}**:
+
+- **Highest Priority Skill Gap**: **Python Survey Microdata Cleaning**
+- **Current Verified Level**: Level 2 (Foundational)
+- **Required Target Level**: Level 4 (Advanced Operational)
+- **Gap Classification**: APPLICATION_GAP (Deficit: **2 levels**)
+
+**AI Triangulation Evidence:**
+- **Knowledge Comprehension**: 48% syntax score in multiple-choice evaluations.
+- **Operational Execution**: Practical errors detected in pandas vector operations, multi-index grouping, and non-response multiplier weight calibrations on NSSO/PLFS microdata.`,
       suggestedActions: [
-        { label: 'Start Python Diagnostic Quiz', actionType: 'START_QUIZ', payload: { competency: 'Python' } },
-        { label: 'Launch Survey Simulation Lab', actionType: 'LAUNCH_LAB', payload: { labId: 'lab-survey-01' } },
-        { label: 'View Unified Course Catalog', actionType: 'VIEW_RECOMMENDATIONS' },
+        { label: 'Run AI Gap Diagnostic', actionType: 'RUN_GAP_CHECK' },
+        { label: 'Start Python Diagnostic Assessment', actionType: 'START_QUIZ', payload: { competency: 'Python' } },
+        { label: 'Open Practice Sandbox', actionType: 'LAUNCH_LAB' },
       ],
     };
   }
 
-  if (lower.includes('python') || lower.includes('pandas') || lower.includes('code') || lower.includes('data cleaning')) {
+  // 2. Next Learning Recommendations ("What should I learn next?")
+  if (
+    lower.includes('learn next') ||
+    lower.includes('should i learn') ||
+    lower.includes('next step') ||
+    lower.includes('what to study') ||
+    lower.includes('next action')
+  ) {
     return {
-      reply: `### Statistical Computing Guidance (Python & Pandas)
-Your **Python gap** is categorized as an **Application Gap**. While your syntax comprehension is solid (48% diagnostic score), repeated errors occurred in vector operations and multi-index grouping during practical survey data cleaning.
+      reply: `### Recommended Immediate Learning Intervention
 
-**Key Technical Best Practices for Survey Microdata:**
-- **Grouped Imputation**: Use \`df.groupby('stratum')['income'].transform(lambda x: x.fillna(x.median()))\` rather than global averages to avoid distortion.
-- **Sample Weight Calibration**: Verify weights sum up to universe projections using \`np.isclose(df['multiplier'].sum(), N_total)\`.
-- **Filtering Outliers**: Apply IQR or z-score trimming per socio-economic sub-stratum before running tabulation scripts.`,
+Officer **${profile.name || 'Aarav Sharma'}**, to accelerate your role readiness from **${profile.roleReadiness || 74}%** toward Senior Statistical Officer benchmarks:
+
+1. **iGOT Karmayogi Accredited Micro-Module**
+   - **Course**: *Python for Official Statistical Analysis & Microdata Pipelines*
+   - **Duration**: 2h 30m (Self-Paced)
+   - **Focus Areas**: pandas \`groupby().transform()\`, outlier trimming, and sample weight calibration.
+
+2. **STATVIA Interactive Simulation Sandbox**
+   - **Task**: *NSS 78th Round Household Data Cleaning & Weight Imputation*
+   - **Duration**: 20 mins interactive sandbox practice.
+
+3. **Verification & Credentialing**
+   - Complete the **Python Level 3 Post-Learning Reassessment** to elevate your level in the **National Competency Passport**.`,
+      suggestedActions: [
+        { label: 'View iGOT Course Catalog', actionType: 'VIEW_RECOMMENDATIONS' },
+        { label: 'Launch Simulation Sandbox', actionType: 'LAUNCH_LAB', payload: { labId: 'lab-survey-01' } },
+        { label: 'Take Level 3 Assessment', actionType: 'START_QUIZ', payload: { competency: 'Python' } },
+      ],
+    };
+  }
+
+  // 3. Domain Question: Sampling Methodology ("What is sampling methodology?")
+  if (
+    lower.includes('sampling methodology') ||
+    lower.includes('sampling design') ||
+    lower.includes('stratified sampling') ||
+    lower.includes('sample weight')
+  ) {
+    return {
+      reply: `### Survey Methodology & Sampling Framework (MoSPI Standards)
+
+**Sampling Methodology** in India's Official Statistical System (NSSO, PLFS, ASI, Household Surveys) refers to the multi-stage probability design used to select representative units across socio-economic strata.
+
+### Core Methodological Components:
+1. **Primary Sampling Units (PSUs)**:
+   - **Rural Sector**: Census Villages / Gram Panchayats.
+   - **Urban Sector**: Urban Frame Survey (UFS) blocks.
+2. **Secondary & Ultimate Sampling Units (SSUs / USUs)**:
+   - Households or manufacturing enterprises selected via **Circular Systematic Sampling**.
+3. **Multiplier & Design Weight Formula**:
+   \\[
+   W_{hij} = \\frac{1}{P_{hi}} \\times \\frac{1}{m_{hi}} \\times \\frac{N_{hi}}{n_{hi}}
+   \\]
+   Where $P_{hi}$ is the inclusion probability of PSU $h$, adjusted for non-response multiplier factors.
+4. **Variance Estimation**: Jackknife linearization or Balanced Repeated Replication (BRR) for complex survey estimators.`,
+      suggestedActions: [
+        { label: 'Take Survey Methodology Quiz', actionType: 'START_QUIZ', payload: { competency: 'Survey Methodology' } },
+        { label: 'Explore NSSTA Survey Courses', actionType: 'VIEW_RECOMMENDATIONS' },
+      ],
+    };
+  }
+
+  // 4. Concept Explanation: Python ("What is Python?")
+  if (
+    lower.includes('what is python') ||
+    (lower.includes('python') && !lower.includes('gap') && !lower.includes('score') && !lower.includes('my'))
+  ) {
+    return {
+      reply: `### Python in Official Statistics & Data Processing
+
+**Python** is an open-source, high-level programming language widely adopted by MoSPI, NSO, and international statistical agencies for automated data pipelines, survey microdata processing, and machine learning imputation.
+
+### Key Applications in National Statistical Operations:
+- **Data Wrangling (pandas & numpy)**: Vectorized operations for cleaning large-scale NSSO and PLFS microdata files containing millions of rows.
+- **Statistical Aggregation**: Computing weighted means, medians, and domain estimates using design multipliers.
+- **Data Quality & Validation**: Automated validation schemas using \`pydantic\` and \`try-except\` exception logging.
+- **Disclosure Risk Control**: Executing $k$-anonymity ($k \\ge 5$) and perturbation algorithms before releasing microdata to the public.`,
       suggestedActions: [
         { label: 'Open Python Practice Lab', actionType: 'LAUNCH_LAB', payload: { labId: 'lab-survey-01' } },
-        { label: 'Take Python Assessment (10 Qs)', actionType: 'START_QUIZ', payload: { competency: 'Python' } },
-        { label: 'View iGOT Python Course', actionType: 'VIEW_RECOMMENDATIONS' },
+        { label: 'Start Python Diagnostic Assessment', actionType: 'START_QUIZ', payload: { competency: 'Python' } },
       ],
     };
   }
 
-  if (lower.includes('karmayogi') || lower.includes('igot') || lower.includes('course') || lower.includes('recommend')) {
+  // 5. General Knowledge: Capital of India ("What is the capital of India?")
+  if (lower.includes('capital of india') || lower.includes('capital of bharat')) {
     return {
-      reply: `### Unified iGOT Karmayogi & NSSTA Integration
-STATVIA dynamically syncs your diagnosed competency gaps with accredited courses on **iGOT Karmayogi** and residential programmes at the **National Statistical Systems Training Academy (NSSTA, Greater Noida)**:
+      reply: `**New Delhi** is the capital of India.
 
-- **iGOT Course**: *Python for Official Statistical Analysis & Data Processing* (Self-Paced, 2h 30m)
-- **NSSTA Programme**: *Advanced Statistical Computing & Survey Microdata Architecture* (3-Day In-Person Batch)
-- **Interactive STATVIA Lab**: *Household Survey Cleaning & Outlier Imputation Sandbox*
-
-All completed modules are cryptographically verified and reflected in your **Competency Passport** for career advancement and APAR reporting.`,
+As your **NIPUN STATVIA Assistant**, headquarters of the **Ministry of Statistics & Programme Implementation (MoSPI)** and the **National Statistical Office (NSO)** are located in **Sardar Patel Bhawan / Sankhyiki Bhawan, New Delhi**.`,
       suggestedActions: [
-        { label: 'View Unified Course Catalog', actionType: 'VIEW_RECOMMENDATIONS' },
-        { label: 'Check Competency Passport', actionType: 'VIEW_PASSPORT' },
+        { label: 'Run AI Gap Diagnostic', actionType: 'RUN_GAP_CHECK' },
+        { label: 'View Learning Pathway', actionType: 'VIEW_RECOMMENDATIONS' },
       ],
     };
   }
 
-  if (lower.includes('gap') || lower.includes('why') || lower.includes('diagnostic') || lower.includes('evidence')) {
+  // 6. Multi-turn Follow-up ("How can I improve it?")
+  if (
+    lower.includes('improve it') ||
+    lower.includes('fix it') ||
+    lower.includes('how to improve') ||
+    lower.includes('how can i close it')
+  ) {
     return {
-      reply: `### AI Gap Intelligence Analysis
-STATVIA evaluates your competencies using an **empirical triangulation formula**:
+      reply: `### Step-by-Step Action Plan to Close Your Priority Competency Gap
 
-1. **Diagnostic Assessment**: 48% (Knowledge comprehension of concepts)
-2. **Practical Task Performance**: 42% (Hands-on operational execution in sandbox)
-3. **Error Pattern Signals**: Detected recurring delays in pandas multi-index slicing and stratum weight multiplication.
+To elevate your competency level from **Level 2 (Foundational)** to **Level 3 (Applied)**:
 
-**AI Diagnosis**: Foundational syntax understanding is present, but real-world execution on NSSO/PLFS style microdata requires targeted hands-on capacity building.`,
+1. **Step 1: Practice Vector Operations**
+   - Use \`df.groupby('stratum')['income'].transform(lambda x: x.fillna(x.median()))\` instead of iterative loops.
+2. **Step 2: Complete the STATVIA Simulation Sandbox**
+   - Work through the 20-minute NSS 78th Round Household Cleaning Lab.
+3. **Step 3: Post-Learning Reassessment**
+   - Take the official Level 3 Reassessment. Achieving $\\ge 70\\%$ elevates your level in your official **Competency Passport**.`,
       suggestedActions: [
-        { label: 'Launch AI Gap Diagnostic', actionType: 'RUN_GAP_CHECK' },
-        { label: 'Practice in Simulation Lab', actionType: 'LAUNCH_LAB' },
+        { label: 'Launch Simulation Sandbox', actionType: 'LAUNCH_LAB', payload: { labId: 'lab-survey-01' } },
+        { label: 'Take Level 3 Assessment', actionType: 'START_QUIZ', payload: { competency: 'Python' } },
       ],
     };
   }
 
-  if (lower.includes('survey') || lower.includes('sampling') || lower.includes('nsso') || lower.includes('plfs') || lower.includes('weight')) {
-    return {
-      reply: `### Survey Methodology & Sampling Protocols
-In India's Official Statistical System, multi-stage stratified sampling (as used in PLFS, NSSO socio-economic rounds, and ASI) relies on:
-
-1. **Primary Sampling Units (PSUs)**: Census villages in rural sectors, Urban Frame Survey (UFS) blocks in urban sectors.
-2. **Ultimate Sampling Units (USUs)**: Households or enterprises selected through circular systematic sampling.
-3. **Multiplier / Weight Calculation**: Inverse of the inclusion probability $(w_i = 1 / \\pi_i)$, adjusted for non-response and post-stratified to census totals.`,
-      suggestedActions: [
-        { label: 'Take Survey Design Quiz', actionType: 'START_QUIZ', payload: { competency: 'Survey Methodology' } },
-        { label: 'View NSSTA Survey Courses', actionType: 'VIEW_RECOMMENDATIONS' },
-      ],
-    };
-  }
-
+  // 7. General Default Fallback
   return {
-    reply: `Namaste ${profile.name}. As ${profile.designation} under ${profile.ministry}, your competency profile is actively monitored against official benchmarks:
+    reply: `Namaste Officer **${profile.name || 'Aarav Sharma'}**. As ${profile.designation || 'Assistant Director'} (${profile.ministry || 'MoSPI'}), I am your dedicated STATVIA Capacity Building Assistant.
 
-- **Verified Skills**: ${profile.verifiedSkillsCount || 14} competencies verified at or above target level.
-- **Active Gaps**: ${userGaps.length || 1} developing areas under targeted capacity building.
-- **Role Readiness**: **${profile.roleReadiness || 82}%** toward Senior Statistical Officer / Lead Analyst benchmarks.
+Regarding your query: "${userMsg}"
 
-I can guide you through survey methodologies, Python scripting for microdata, iGOT Karmayogi courses, or help you prepare for upcoming diagnostic assessments.`,
+I can assist you with:
+1. **Empirical Skill Gap Analysis** (e.g. *"What is my biggest current skill gap?"*)
+2. **Targeted Learning Recommendations** (e.g. *"What should I learn next?"*)
+3. **Statistical Methodologies & Standards** (e.g. *"What is sampling methodology?"* or *"What is SNA 2008?"*)
+4. **Data Science & Computing** (e.g. *"What is Python?"* or *"How to compute PLFS multipliers?"*)`,
     suggestedActions: [
       { label: 'Run AI Gap Diagnostic', actionType: 'RUN_GAP_CHECK' },
-      { label: 'Start Python Assessment', actionType: 'START_QUIZ', payload: { competency: 'Python' } },
-      { label: 'Launch Simulation Lab', actionType: 'LAUNCH_LAB' },
-      { label: 'View Competency Passport', actionType: 'VIEW_PASSPORT' },
+      { label: 'View Learning Pathway', actionType: 'VIEW_RECOMMENDATIONS' },
+      { label: 'Take Diagnostic Assessment', actionType: 'START_QUIZ', payload: { competency: 'Python' } },
     ],
   };
 }

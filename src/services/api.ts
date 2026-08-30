@@ -162,6 +162,21 @@ export const api = {
     return dataRes;
   },
 
+  async googleVerify(data: { email: string; name: string; googleUid?: string; photoURL?: string; idToken?: string }): Promise<{ success: boolean; user: UserProfile; token?: string; message?: string }> {
+    const dataRes = await safeFetchJson<{ success: boolean; user: UserProfile; token?: string; message?: string }>(
+      '/api/auth/google-verify',
+      {
+        method: 'POST',
+        body: JSON.stringify(data),
+      },
+      { success: false, user: null as any, message: 'Google authentication connection failed.' }
+    );
+    if (dataRes.success && dataRes.token) {
+      tokenStorage.set(dataRes.token);
+    }
+    return dataRes;
+  },
+
   async logout(): Promise<{ success: boolean; message: string }> {
     try {
       const res = await fetchWithAuth('/api/auth/logout', { method: 'POST' });

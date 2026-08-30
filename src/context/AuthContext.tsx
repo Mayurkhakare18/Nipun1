@@ -1241,6 +1241,22 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const initSession = useCallback(async () => {
     setIsLoading(true);
     try {
+      // 0. Check if returning from Google OAuth 2.0 redirect
+      if (typeof window !== 'undefined' && window.location.hash.includes('access_token=')) {
+        try {
+          const { user } = await firebaseService.signInWithGoogle();
+          if (user) {
+            syncUserData(user);
+            setIsAuthReady(true);
+            setIsLoading(false);
+            showNotification('Google Authentication Verified', `Signed in as ${user.name} (${user.email})`);
+            return;
+          }
+        } catch (oauthErr) {
+          console.warn('[Google OAuth Init] Token processing notice:', oauthErr);
+        }
+      }
+
       const existingToken = tokenStorage.get();
       if (existingToken) {
         // Try backend server first
@@ -1621,57 +1637,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       return false;
     } catch (err: any) {
       console.error('Google Sign-in processing error:', err);
-      // Seamlessly sign in as default Google account if direct popup threw
-      try {
-        const fallbackUser = {
-          id: 'google-user-verified',
-          employeeId: 'GOOG-2026-9901',
-          name: 'Google Officer User',
-          email: 'mayurkhakarec55@gmail.com',
-          role: 'LEARNER' as const,
-          designation: 'Senior Statistical Officer',
-          currentRole: 'Senior Statistical Officer',
-          targetRole: 'Assistant Director / Data Lead',
-          level: 11,
-          cadre: 'Subordinate Statistical Service (SSS)',
-          organization: 'Government of India',
-          ministry: 'Ministry of Statistics and Programme Implementation (MoSPI)',
-          department: 'National Accounts Division (NAD)',
-          yearsOfExperience: 5,
-          education: 'M.Sc. Statistics',
-          specialization: 'Survey Statistics & Applied Data Science',
-          location: 'New Delhi, Headquarters',
-          preferredLanguage: 'English / Hindi',
-          previousRoles: ['Junior Statistical Officer'],
-          currentProjects: ['National Sample Survey Modernization'],
-          technologiesUsed: ['Python', 'SQL', 'R'],
-          trainingHours: 24,
-          roleReadiness: 80,
-          verifiedSkillsCount: 12,
-          developingSkillsCount: 3,
-        };
-
-        const session = mockDb.createSession({
-          ...fallbackUser,
-          passwordSalt: 'google_salt',
-          passwordHash: 'GOOGLE_HASH',
-          createdAt: new Date().toISOString(),
-          lastLoginAt: new Date().toISOString(),
-          status: 'ACTIVE',
-          authProvider: 'CREDENTIALS',
-        });
-        tokenStorage.set(session.token);
-        syncUserData(fallbackUser as any);
-        setIsAuthModalOpen(false);
-        showNotification('Google Sign-In Connected', `Signed in as ${fallbackUser.name} (${fallbackUser.email})`);
-        launchWorkspace(pendingTabRef.current || 'dashboard');
-        return true;
-      } catch {
-        const errMsg = 'Google Sign-in was interrupted. Please try entering your official email & password.';
-        setAuthError(errMsg);
-        showNotification('Sign-In Notice', errMsg, 'info');
-        return false;
-      }
+      const errMsg = err?.message || 'Google Sign-in was interrupted. Please try again or use official email login.';
+      setAuthError(errMsg);
+      showNotification('Google Sign-In Notice', errMsg, 'info');
+      return false;
     } finally {
       setIsLoading(false);
     }
