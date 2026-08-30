@@ -34,6 +34,18 @@
       "destination": "/api/quiz/assessments"
     },
     {
+      "source": "/api/reassessments/submit",
+      "destination": "/api/reassessments/submit"
+    },
+    {
+      "source": "/api/gap-analysis/ai-diagnosis",
+      "destination": "/api/gap-analysis/ai-diagnosis"
+    },
+    {
+      "source": "/api/assistant/chat",
+      "destination": "/api/assistant/chat"
+    },
+    {
       "source": "/api/(.*)",
       "destination": "/api?__url=$1"
     },
