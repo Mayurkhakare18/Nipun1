@@ -1,4 +1,4 @@
-import { app } from '../server/app.js';
+import { app } from '../server/app';
 
 export default async function handler(req: any, res: any) {
   // CORS Headers
