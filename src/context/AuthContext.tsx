@@ -1504,55 +1504,76 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       setIsLoading(true);
       setAuthError(null);
 
-      if (!userData.email || !userData.name || !userData.password) {
+      const trimmedName = userData.name?.trim() || '';
+      const trimmedEmail = userData.email?.trim().toLowerCase() || '';
+      const password = userData.password || '';
+
+      if (!trimmedName || !trimmedEmail || !password) {
         const msg = 'Please provide official full name, email, and password.';
         setAuthError(msg);
         showNotification('Registration Error', msg, 'warning');
         return false;
       }
 
-      // 1. ALWAYS persist to Mock Database Store so local credentials and username/password are NEVER lost
-      const mockResult = mockDb.registerUser({
-        ...userData,
-        email: userData.email,
-        name: userData.name,
-        password: userData.password,
-      });
-
-      // 2. Persist to Firestore via firebaseService
-      let firebaseUserProfile: UserProfile | null = null;
-      try {
-        const fbRes = await firebaseService.registerWithEmail({
-          ...userData,
-          name: userData.name,
-          email: userData.email,
-          password: userData.password,
-        });
-        if (fbRes?.user) {
-          firebaseUserProfile = fbRes.user;
-        }
-      } catch (fbErr) {
-        console.warn('[AuthContext] Firebase registration background sync note:', fbErr);
+      if (password.length < 6) {
+        const msg = 'Official password must be at least 6 characters in length.';
+        setAuthError(msg);
+        showNotification('Validation Error', msg, 'warning');
+        return false;
       }
 
-      // 3. Also persist to Backend API (Express server DB)
-      let registeredUser: UserProfile | null = mockResult.user || firebaseUserProfile || null;
+      const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+      if (!emailRegex.test(trimmedEmail)) {
+        const msg = 'Please enter a valid email address (e.g. officer@mospi.gov.in).';
+        setAuthError(msg);
+        showNotification('Validation Error', msg, 'warning');
+        return false;
+      }
+
+      // 1. ALWAYS persist to Mock Database Store & check for duplicates
+      const mockResult = mockDb.registerUser({
+        ...userData,
+        email: trimmedEmail,
+        name: trimmedName,
+        password: password,
+      });
+
+      let registeredUser: UserProfile | null = mockResult.user || null;
+
+      // 2. Persist to Backend API (Express server DB)
       try {
         const apiRes = await api.register({
           ...userData,
-          name: userData.name,
-          email: userData.email,
-          password: userData.password,
+          name: trimmedName,
+          email: trimmedEmail,
+          password: password,
         });
         if (apiRes.success && apiRes.user) {
           registeredUser = apiRes.user;
         }
-      } catch {
-        // Mock DB fallback is already stored
+      } catch (apiErr) {
+        console.warn('[AuthContext] Backend API registration notice:', apiErr);
+      }
+
+      // 3. Persist to Firestore via firebaseService (non-blocking with 4s timeout)
+      try {
+        const fbPromise = firebaseService.registerWithEmail({
+          ...userData,
+          name: trimmedName,
+          email: trimmedEmail,
+          password: password,
+        });
+        const timeoutPromise = new Promise<null>((resolve) => setTimeout(() => resolve(null), 4000));
+        const fbRes: any = await Promise.race([fbPromise, timeoutPromise]);
+        if (fbRes?.user) {
+          registeredUser = fbRes.user;
+        }
+      } catch (fbErr: any) {
+        console.warn('[AuthContext] Firebase registration background sync note:', fbErr);
       }
 
       if (!registeredUser) {
-        const errMsg = mockResult.message || 'Unable to register account. Please check your details.';
+        const errMsg = mockResult.message || 'Unable to register account. Please check your details and try again.';
         setAuthError(errMsg);
         showNotification('Registration Failed', errMsg, 'warning');
         return false;
@@ -1572,7 +1593,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       launchWorkspace(targetTab);
       return true;
     } catch (err: any) {
-      const errMsg = err.message || 'Registration service error. Please try again.';
+      console.error('Registration processing error:', err);
+      const errMsg = err?.message || 'Registration service error. Please try again.';
       setAuthError(errMsg);
       showNotification('Error', errMsg, 'warning');
       return false;

@@ -69,10 +69,21 @@ export const AuthModal: React.FC = () => {
 
   const handleRegisterSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!regName || !regEmail) return;
+    if (!regName.trim()) {
+      showNotification('Validation Error', 'Please enter your full official name.', 'warning');
+      return;
+    }
+    if (!regEmail.trim()) {
+      showNotification('Validation Error', 'Please enter your official email address.', 'warning');
+      return;
+    }
+    if (!regPassword || regPassword.length < 6) {
+      showNotification('Validation Error', 'Official password must be at least 6 characters in length.', 'warning');
+      return;
+    }
     await register({
-      name: regName,
-      email: regEmail,
+      name: regName.trim(),
+      email: regEmail.trim(),
       password: regPassword,
       designation: regDesignation,
       ministry: regMinistry,

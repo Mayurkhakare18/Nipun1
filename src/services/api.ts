@@ -67,14 +67,20 @@ async function fetchWithAuth(url: string, options: RequestInit = {}, retries = 2
     headers.set('Authorization', `Bearer ${token}`);
   }
 
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 8000);
+
   try {
     const res = await fetch(url, {
       ...options,
       headers,
+      signal: options.signal || controller.signal,
     });
+    clearTimeout(timeoutId);
     return res;
   } catch (err: any) {
-    if (retries > 0) {
+    clearTimeout(timeoutId);
+    if (retries > 0 && err?.name !== 'AbortError') {
       await new Promise((resolve) => setTimeout(resolve, 200));
       return fetchWithAuth(url, options, retries - 1);
     }
