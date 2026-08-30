@@ -42,9 +42,9 @@ import {
 export { normalizeDatabaseUrl };
 
 // Reusable PostgreSQL connection pool for health checks
-let dbHealthPool: pg.Pool | null = null;
+let dbHealthPool: any = null;
 
-function getDbHealthPool(): pg.Pool | null {
+function getDbHealthPool(): any {
   const rawDatabaseUrl = process.env.DATABASE_URL;
   if (!rawDatabaseUrl) {
     return null;
