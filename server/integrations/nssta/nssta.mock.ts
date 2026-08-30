@@ -1,4 +1,4 @@
-import type { NSSTAProgramme } from '../../../src/types';
+import type { NSSTAProgramme } from '../../../src/types.js';
 
 export const MOCK_NSSTA_PROGRAMMES: NSSTAProgramme[] = [
   {

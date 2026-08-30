@@ -1,4 +1,4 @@
-import type { IGOTCourse } from '../../../src/types';
+import type { IGOTCourse } from '../../../src/types.js';
 
 export const MOCK_IGOT_COURSES: IGOTCourse[] = [
   {

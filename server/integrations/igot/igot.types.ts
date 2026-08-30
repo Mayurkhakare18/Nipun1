@@ -1,4 +1,4 @@
-import type { IGOTCourse } from '../../../src/types';
+import type { IGOTCourse } from '../../../src/types.js';
 
 export interface IGOTAdapter {
   getCourses(filters?: { competency?: string; query?: string; category?: string }): Promise<IGOTCourse[]>;

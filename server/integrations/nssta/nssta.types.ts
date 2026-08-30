@@ -1,4 +1,4 @@
-import type { NSSTAProgramme } from '../../../src/types';
+import type { NSSTAProgramme } from '../../../src/types.js';
 
 export interface NSSTAAdapter {
   getTrainingProgrammes(filters?: { category?: string; query?: string }): Promise<NSSTAProgramme[]>;

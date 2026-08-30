@@ -1,4 +1,4 @@
-import expressPkg from 'express';
+import expressPkg, { type Request, type Response } from 'express';
 const express = (expressPkg as any).default || expressPkg;
 import pg from 'pg';
 import { db } from './db.js';
@@ -104,7 +104,7 @@ export function createExpressApp() {
   let currentUserId = 'user-learner-01';
 
   // Helper to securely resolve the authenticated user from session token or active fallback
-  function resolveUser(req: express.Request): UserProfile | null {
+  function resolveUser(req: Request): UserProfile | null {
     const authHeader = req.headers['authorization'] || req.headers['x-auth-token'];
     let token: string | undefined;
     if (typeof authHeader === 'string') {
@@ -1522,7 +1522,7 @@ Key Topics:
   // ==========================================
   // 9. AI MENTOR & ASSISTANT CHAT
   // ==========================================
-  const handleAssistantChat = async (req: express.Request, res: express.Response) => {
+  const handleAssistantChat = async (req: Request, res: Response) => {
     try {
       const { message, history } = req.body;
       const user = resolveUser(req) || db.state.users[currentUserId] || db.state.users['user-learner-01'];

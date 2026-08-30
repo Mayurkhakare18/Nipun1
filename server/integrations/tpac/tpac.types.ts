@@ -1,4 +1,4 @@
-import type { NSSTAProgramme } from '../../../src/types';
+import type { NSSTAProgramme } from '../../../src/types.js';
 
 export interface TPACMandate {
   id: string;
