@@ -152,6 +152,76 @@ export default async function handler(req: any, res: any) {
       }
     }
 
+// Helper to UPSERT user and profile records into PostgreSQL / Supabase
+async function syncUserToPostgres(user: any, authProvider: string = 'CREDENTIALS') {
+  try {
+    const pool = getHealthPool();
+    if (!pool) return;
+
+    const client = await pool.connect();
+    try {
+      // 1. UPSERT INTO users (NO PASSWORDS STORED IN POSTGRESQL)
+      const userUpsertQuery = `
+        INSERT INTO users (id, email, name, role, status, auth_provider, created_at, updated_at, last_login_at)
+        VALUES ($1, $2, $3, $4, 'ACTIVE', $5, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+        ON CONFLICT (id) DO UPDATE SET
+          email = EXCLUDED.email,
+          name = EXCLUDED.name,
+          role = EXCLUDED.role,
+          auth_provider = EXCLUDED.auth_provider,
+          updated_at = CURRENT_TIMESTAMP,
+          last_login_at = CURRENT_TIMESTAMP;
+      `;
+      await client.query(userUpsertQuery, [
+        user.id,
+        user.email,
+        user.name,
+        user.role || 'LEARNER',
+        authProvider,
+      ]);
+
+      // 2. UPSERT INTO official_profiles
+      const profileUpsertQuery = `
+        INSERT INTO official_profiles (
+          user_id, employee_id, cadre, pay_level, years_of_experience,
+          education, specialization, location, preferred_language,
+          training_hours, role_readiness_score, verified_skills_count, developing_skills_count,
+          created_at, updated_at
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+        ON CONFLICT (user_id) DO UPDATE SET
+          employee_id = EXCLUDED.employee_id,
+          cadre = EXCLUDED.cadre,
+          pay_level = EXCLUDED.pay_level,
+          years_of_experience = EXCLUDED.years_of_experience,
+          education = EXCLUDED.education,
+          specialization = EXCLUDED.specialization,
+          location = EXCLUDED.location,
+          updated_at = CURRENT_TIMESTAMP;
+      `;
+      await client.query(profileUpsertQuery, [
+        user.id,
+        user.employeeId || `MOSPI-${Math.floor(1000 + Math.random() * 9000)}`,
+        user.cadre || 'Subordinate Statistical Service (SSS)',
+        user.level || 11,
+        user.yearsOfExperience || 5.0,
+        user.education || 'M.Sc. Statistics',
+        user.specialization || 'Survey Sampling & Data Architecture',
+        user.location || 'New Delhi',
+        user.preferredLanguage || 'English / Hindi',
+        user.trainingHours || 24.0,
+        user.roleReadiness || 75.0,
+        user.verifiedSkillsCount || 10,
+        user.developingSkillsCount || 4,
+      ]);
+    } finally {
+      client.release();
+    }
+  } catch (err: any) {
+    console.warn('[PostgreSQL Sync Note]', err?.message || String(err));
+  }
+}
+
     // -------------------------------------------------------------------
     // 2. AUTHENTICATION & USER SESSION
     // -------------------------------------------------------------------
@@ -172,6 +242,7 @@ export default async function handler(req: any, res: any) {
         return res.status(401).json({ success: false, message: vres.message || 'Invalid credentials.' });
       }
       const session = db.createSession(vres.user.id);
+      syncUserToPostgres(vres.user, 'CREDENTIALS').catch(() => {});
       return res.status(200).json({ success: true, user: vres.user, token: session.token, message: `Welcome back, ${vres.user.name}!` });
     }
 
@@ -214,6 +285,7 @@ export default async function handler(req: any, res: any) {
       db.state.learnerCompetencies[newUserId] = [...(db.state.learnerCompetencies['user-learner-01'] || [])];
       db.state.gapAnalysis[newUserId] = [...(db.state.gapAnalysis['user-learner-01'] || [])];
       const session = db.createSession(newUserId);
+      syncUserToPostgres(newUser, 'CREDENTIALS').catch(() => {});
       return res.status(201).json({ success: true, user: newUser, token: session.token });
     }
 
@@ -269,6 +341,7 @@ export default async function handler(req: any, res: any) {
       }
 
       const session = db.createSession(existingUser.id);
+      syncUserToPostgres(existingUser, 'GOOGLE').catch(() => {});
       return res.status(200).json({
         success: true,
         user: existingUser,
