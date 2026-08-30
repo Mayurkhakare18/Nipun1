@@ -10,6 +10,30 @@
       "destination": "/api/health"
     },
     {
+      "source": "/api/auth/current-user",
+      "destination": "/api/auth/current-user"
+    },
+    {
+      "source": "/api/learner/profile",
+      "destination": "/api/learner/profile"
+    },
+    {
+      "source": "/api/learner/competencies",
+      "destination": "/api/learner/competencies"
+    },
+    {
+      "source": "/api/learner/gaps",
+      "destination": "/api/learner/gaps"
+    },
+    {
+      "source": "/api/learning-path",
+      "destination": "/api/learning-path"
+    },
+    {
+      "source": "/api/quiz/assessments",
+      "destination": "/api/quiz/assessments"
+    },
+    {
       "source": "/api/(.*)",
       "destination": "/api?__url=$1"
     },
@@ -19,4 +43,3 @@
     }
   ]
 }
-
