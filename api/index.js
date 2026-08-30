@@ -1,6 +1,5 @@
 // server/app.js
-import expressPkg from "express";
-import pg from "pg";
+import { createRequire } from "module";
 import crypto from "crypto";
 var INITIAL_COMPETENCIES = [
   // Statistical Competencies
@@ -3742,7 +3741,9 @@ function getPostgresPoolConfig(rawUrl) {
     max: 5
   };
 }
-var express = expressPkg.default || expressPkg;
+var require2 = createRequire(import.meta.url);
+var express = require2("express");
+var pg = require2("pg");
 var Pool = pg.Pool || pg.default?.Pool || pg;
 var dbHealthPool = null;
 function getDbHealthPool() {

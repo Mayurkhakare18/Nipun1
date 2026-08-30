@@ -1,6 +1,10 @@
-import expressPkg, { type Request, type Response } from 'express';
-const express = (expressPkg as any).default || expressPkg;
-import pg from 'pg';
+import { createRequire } from 'module';
+const require = createRequire(import.meta.url);
+const express = require('express');
+const pg = require('pg');
+type Request = any;
+type Response = any;
+
 import { db } from './db.js';
 import { igotAdapter } from './integrations/igot/igot.client.js';
 import { nsstaAdapter } from './integrations/nssta/nssta.client.js';
@@ -28,7 +32,7 @@ import type {
   CompetencyUpgradeRecord,
 } from '../src/types.js';
 
-const Pool = (pg as any).Pool || (pg as any).default?.Pool || pg;
+const Pool = pg.Pool || pg.default?.Pool || pg;
 
 import {
   normalizeDatabaseUrl,
