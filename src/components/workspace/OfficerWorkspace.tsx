@@ -37,8 +37,22 @@ export const OfficerWorkspace: React.FC = () => {
     openAuthModal,
   } = useAuth();
 
-  // Protected Route Guard: If user is not authenticated, display official security gate
-  if (isAuthReady && (!isAuthenticated || !currentUser)) {
+  // 1. If authentication state is still initializing, show loading state
+  if (!isAuthReady) {
+    return (
+      <div className="min-h-screen flex flex-col items-center justify-center bg-[#f9f9ff] text-[#111c2d]">
+        <div className="flex flex-col items-center gap-3">
+          <div className="w-10 h-10 border-4 border-[#000a1e] border-t-[#fe9832] rounded-full animate-spin"></div>
+          <span className="text-xs font-bold uppercase tracking-wider text-[#000a1e]">
+            Verifying Officer Authentication Session...
+          </span>
+        </div>
+      </div>
+    );
+  }
+
+  // 2. Protected Route Guard: If user is not authenticated, display official security gate
+  if (!isAuthenticated || !currentUser) {
     return (
       <div className="min-h-screen flex flex-col bg-[#f9f9ff] text-[#111c2d]">
         <GovHeader />

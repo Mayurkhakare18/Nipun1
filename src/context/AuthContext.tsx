@@ -1197,7 +1197,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   // Protected action guard
   const requireAuth = useCallback((actionCallback: () => void, promptMessage?: string): boolean => {
-    if (!isAuthenticated || !currentUser) {
+    if (isLoading || !isAuthReady || !isAuthenticated || !currentUser) {
       openAuthModal('signin');
       showNotification(
         'Official Sign-In Required',
@@ -1208,10 +1208,21 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
     actionCallback();
     return true;
-  }, [isAuthenticated, currentUser, openAuthModal, showNotification]);
+  }, [isLoading, isAuthReady, isAuthenticated, currentUser, openAuthModal, showNotification]);
 
   // Protected Route Launcher
   const launchWorkspace = useCallback((tab: string = 'dashboard') => {
+    if (isLoading || !isAuthReady) {
+      pendingTabRef.current = tab;
+      openAuthModal('signin');
+      showNotification(
+        'Authenticating Officer Session',
+        'Please sign in with your official MoSPI credentials or Jan-Parichay SSO to enter the Officer Workspace.',
+        'info'
+      );
+      return;
+    }
+
     if (!isAuthenticated || !currentUser) {
       pendingTabRef.current = tab;
       openAuthModal('signin');
@@ -1225,7 +1236,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     setActiveTab(tab);
     setActiveView('workspace');
     window.scrollTo({ top: 0, behavior: 'smooth' });
-  }, [isAuthenticated, currentUser, openAuthModal, showNotification]);
+  }, [isLoading, isAuthReady, isAuthenticated, currentUser, openAuthModal, showNotification]);
 
   // Sync state from active user
   const syncUserData = useCallback((user: UserProfile) => {
