@@ -50,6 +50,24 @@ function normalizeDbUrl(rawUrl?: string): string {
   return `${scheme}${authStr}@${hostAndRest}`;
 }
 
+function parseSafeDbInfo(rawUrl?: string): { hasUrl: boolean; protocol: string; host: string; port: string; dbName: string; user: string } {
+  if (!rawUrl) return { hasUrl: false, protocol: '', host: '', port: '', dbName: '', user: '' };
+  try {
+    const clean = normalizeDbUrl(rawUrl);
+    const parsed = new URL(clean);
+    return {
+      hasUrl: true,
+      protocol: parsed.protocol.replace(':', ''),
+      host: parsed.hostname,
+      port: parsed.port || '5432',
+      dbName: parsed.pathname.replace(/^\//, ''),
+      user: parsed.username ? parsed.username.slice(0, 4) + '***' : '',
+    };
+  } catch {
+    return { hasUrl: true, protocol: 'invalid', host: '', port: '', dbName: '', user: '' };
+  }
+}
+
 function getPool(rawDatabaseUrl: string): any {
   if (!poolInstance) {
     const cleanUrl = normalizeDbUrl(rawDatabaseUrl);
@@ -61,7 +79,7 @@ function getPool(rawDatabaseUrl: string): any {
     poolInstance = new Pool({
       connectionString: cleanUrl,
       ssl: isLocal ? false : { rejectUnauthorized: false },
-      connectionTimeoutMillis: 5000,
+      connectionTimeoutMillis: 8000,
       idleTimeoutMillis: 10000,
       max: 3,
     });
@@ -91,46 +109,63 @@ export default async function handler(req: any, res: any) {
     // Ignore header setting errors
   }
 
-  console.log('[DB_HEALTH] function started');
+  console.log('[DB_HEALTH] Connection verification started');
 
   const rawUrl = process.env.DATABASE_URL;
-  const hasDatabaseUrl = !!(rawUrl && rawUrl.trim());
-  console.log(`[DB_HEALTH] DATABASE_URL configured: ${hasDatabaseUrl ? 'YES' : 'NO'}`);
+  const safeInfo = parseSafeDbInfo(rawUrl);
 
-  if (!hasDatabaseUrl) {
+  console.log(`[DB_HEALTH] DATABASE_URL configured: ${safeInfo.hasUrl ? 'YES' : 'NO'}`);
+  console.log(`[DB_HEALTH] Protocol: ${safeInfo.protocol || 'none'}`);
+  console.log(`[DB_HEALTH] Host: ${safeInfo.host || 'none'}`);
+  console.log(`[DB_HEALTH] Port: ${safeInfo.port || '5432'}`);
+  console.log(`[DB_HEALTH] Database: ${safeInfo.dbName || 'none'}`);
+
+  if (!safeInfo.hasUrl) {
     console.error('[DB_HEALTH] PostgreSQL connection failed');
-    console.error('[DB_HEALTH] error code: DATABASE_URL_MISSING');
-    console.error('[DB_HEALTH] error message: DATABASE_URL is missing from environment');
+    console.error('[DB_HEALTH] Error code: DATABASE_URL_MISSING');
+    console.error('[DB_HEALTH] Error message: DATABASE_URL is missing from environment variables');
     return res.status(500).json({
       status: 'error',
+      code: 'DATABASE_URL_MISSING',
+      message: 'DATABASE_URL is missing from environment variables',
     });
   }
 
   let client: any = null;
   try {
-    const pool = getPool(rawUrl);
+    console.log('[DB_HEALTH] Connecting to PostgreSQL pool...');
+    const pool = getPool(rawUrl!);
     client = await pool.connect();
+    console.log('[DB_HEALTH] Connection established. Executing SELECT 1 AS health...');
+
     const result = await client.query('SELECT 1 AS health;');
 
     if (result && result.rows && result.rows.length > 0) {
-      console.log('[DB_HEALTH] PostgreSQL connection and SELECT 1 query succeeded');
+      console.log('[DB_HEALTH] Connection succeeded! SELECT 1 returned:', result.rows[0]);
       return res.status(200).json({
         status: 'ok',
       });
     }
 
-    console.error('[DB_HEALTH] PostgreSQL connection failed');
-    console.error('[DB_HEALTH] error code: EMPTY_QUERY_RESULT');
-    console.error('[DB_HEALTH] error message: SELECT 1 returned empty result set');
+    console.error('[DB_HEALTH] PostgreSQL connection failed: Empty query result');
     return res.status(500).json({
       status: 'error',
+      code: 'EMPTY_QUERY_RESULT',
+      message: 'SELECT 1 returned empty result set',
     });
   } catch (err: any) {
+    const errCode = err?.code || 'UNKNOWN_DB_ERROR';
+    const errMessage = err?.message || String(err);
     console.error('[DB_HEALTH] PostgreSQL connection failed');
-    console.error('[DB_HEALTH] error code:', err?.code || 'UNKNOWN_DB_ERROR');
-    console.error('[DB_HEALTH] error message:', err?.message || String(err));
+    console.error(`[DB_HEALTH] Error code: ${errCode}`);
+    console.error(`[DB_HEALTH] Error message: ${errMessage}`);
+
     return res.status(500).json({
       status: 'error',
+      code: errCode,
+      message: errMessage,
+      dbHost: safeInfo.host,
+      dbPort: safeInfo.port,
     });
   } finally {
     if (client) {
