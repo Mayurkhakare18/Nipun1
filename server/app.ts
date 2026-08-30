@@ -139,14 +139,22 @@ export function createExpressApp() {
 
     if (!hasDatabaseUrl) {
       console.error('[DB_HEALTH] connection failed: DATABASE_URL missing from environment');
-      return res.status(500).json({ status: 'error' });
+      return res.status(500).json({
+        status: 'error',
+        error_code: 'DATABASE_URL_MISSING',
+        error_message: 'DATABASE_URL is missing from environment variables',
+      });
     }
 
     try {
       const pool = getDbHealthPool();
       if (!pool) {
         console.error('[DB_HEALTH] connection failed: PostgreSQL pool initialization failed');
-        return res.status(500).json({ status: 'error' });
+        return res.status(500).json({
+          status: 'error',
+          error_code: 'POOL_INIT_FAILED',
+          error_message: 'PostgreSQL pool initialization failed',
+        });
       }
 
       const client = await pool.connect();
@@ -157,13 +165,23 @@ export function createExpressApp() {
           return res.status(200).json({ status: 'ok' });
         }
         console.error('[DB_HEALTH] SELECT 1 returned empty result');
-        return res.status(500).json({ status: 'error' });
+        return res.status(500).json({
+          status: 'error',
+          error_code: 'EMPTY_QUERY_RESULT',
+          error_message: 'SELECT 1 returned empty result set',
+        });
       } finally {
         client.release();
       }
     } catch (err: any) {
-      console.error('[DB_HEALTH] connection failed:', err?.code || err?.message || String(err));
-      return res.status(500).json({ status: 'error' });
+      const code = err?.code || 'DB_CONNECTION_ERROR';
+      const message = err?.message || String(err);
+      console.error('[DB_HEALTH] connection failed:', code, message);
+      return res.status(500).json({
+        status: 'error',
+        error_code: code,
+        error_message: message,
+      });
     }
   });
 
