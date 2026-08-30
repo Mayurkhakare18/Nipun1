@@ -2,52 +2,8 @@
   "version": 2,
   "rewrites": [
     {
-      "source": "/api/health/db",
-      "destination": "/api/health/db"
-    },
-    {
-      "source": "/api/health",
-      "destination": "/api/health"
-    },
-    {
-      "source": "/api/auth/current-user",
-      "destination": "/api/auth/current-user"
-    },
-    {
-      "source": "/api/learner/profile",
-      "destination": "/api/learner/profile"
-    },
-    {
-      "source": "/api/learner/competencies",
-      "destination": "/api/learner/competencies"
-    },
-    {
-      "source": "/api/learner/gaps",
-      "destination": "/api/learner/gaps"
-    },
-    {
-      "source": "/api/learning-path",
-      "destination": "/api/learning-path"
-    },
-    {
-      "source": "/api/quiz/assessments",
-      "destination": "/api/quiz/assessments"
-    },
-    {
-      "source": "/api/reassessments/submit",
-      "destination": "/api/reassessments/submit"
-    },
-    {
-      "source": "/api/gap-analysis/ai-diagnosis",
-      "destination": "/api/gap-analysis/ai-diagnosis"
-    },
-    {
-      "source": "/api/assistant/chat",
-      "destination": "/api/assistant/chat"
-    },
-    {
       "source": "/api/(.*)",
-      "destination": "/api?__url=$1"
+      "destination": "/api/$1"
     },
     {
       "source": "/((?!api/).*)",
