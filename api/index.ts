@@ -110,45 +110,428 @@ export default async function handler(req: any, res: any) {
       return res.status(200).json({ status: 'ok', environment: 'production' });
     }
 
-    if (method === 'GET' && (pathname === '/api/health/db' || pathname === '/health/db')) {
+    if (method === 'GET' && (pathname === '/api/inspect-db' || pathname === '/inspect-db')) {
       const dbUrl = process.env.DATABASE_URL;
       if (!dbUrl) {
-        return res.status(500).json({
-          status: 'error',
-          error_code: 'DATABASE_URL_MISSING',
-          error_message: 'DATABASE_URL is missing from environment variables',
-        });
+        return res.status(500).json({ status: 'error', message: 'DATABASE_URL missing' });
       }
 
+      const host = dbUrl.split('@')[1]?.split('/')[0] || 'unknown';
+      const pool = getHealthPool();
+      if (!pool) return res.status(500).json({ status: 'error', message: 'Pool init failed' });
+
+      const client = await pool.connect();
       try {
-        const pool = getHealthPool();
-        if (!pool) {
-          return res.status(500).json({
-            status: 'error',
-            error_code: 'POOL_INIT_FAILED',
-            error_message: 'PostgreSQL pool initialization failed',
-          });
-        }
-        const client = await pool.connect();
-        try {
-          const qres = await client.query('SELECT 1 AS health;');
-          if (qres && qres.rows && qres.rows.length > 0) {
-            return res.status(200).json({ status: 'ok' });
-          }
-          return res.status(500).json({
-            status: 'error',
-            error_code: 'EMPTY_QUERY_RESULT',
-            error_message: 'SELECT 1 returned empty result set',
-          });
-        } finally {
-          client.release();
-        }
-      } catch (err: any) {
-        return res.status(500).json({
-          status: 'error',
-          error_code: err?.code || 'DB_CONNECTION_ERROR',
-          error_message: err?.message || String(err),
+        const q1 = await client.query('SELECT current_database(), current_schema();');
+        const q2 = await client.query(`
+          SELECT table_schema, table_name 
+          FROM information_schema.tables 
+          WHERE table_schema NOT IN ('pg_catalog', 'information_schema') 
+          ORDER BY table_schema, table_name;
+        `);
+        const q3 = await client.query(`
+          SELECT EXISTS (
+            SELECT 1 FROM information_schema.tables WHERE table_schema='public' AND table_name='users'
+          ) AS users_exists;
+        `);
+        const q4 = await client.query(`
+          SELECT EXISTS (
+            SELECT 1 FROM information_schema.tables WHERE table_schema='public' AND table_name='official_profiles'
+          ) AS official_profiles_exists;
+        `);
+
+        return res.status(200).json({
+          success: true,
+          safeHost: host,
+          contains_dnrqtmadtmgizqdchrbk: host.includes('dnrqtmadtmgizqdchrbk'),
+          database_info: q1.rows[0],
+          existing_tables_count: q2.rows.length,
+          tables_list: q2.rows.map((r: any) => `${r.table_schema}.${r.table_name}`),
+          users_exists: q3.rows[0]?.users_exists || false,
+          official_profiles_exists: q4.rows[0]?.official_profiles_exists || false,
         });
+      } catch (err: any) {
+        return res.status(500).json({ success: false, error: err?.message || String(err) });
+      } finally {
+        client.release();
+      }
+    }
+
+    if (method === 'POST' && (pathname === '/api/deploy-schema' || pathname === '/deploy-schema')) {
+      const pool = getHealthPool();
+      if (!pool) return res.status(500).json({ status: 'error', message: 'Pool init failed' });
+
+      const schemaSql = `
+        CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
+
+        CREATE TABLE IF NOT EXISTS departments (
+            id VARCHAR(64) PRIMARY KEY,
+            name VARCHAR(255) NOT NULL,
+            short_code VARCHAR(32) NOT NULL,
+            ministry VARCHAR(255) DEFAULT 'Ministry of Statistics & Programme Implementation',
+            description TEXT,
+            created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+        );
+
+        CREATE TABLE IF NOT EXISTS roles (
+            id VARCHAR(64) PRIMARY KEY,
+            title VARCHAR(255) NOT NULL,
+            cadre VARCHAR(64) NOT NULL,
+            pay_level INTEGER NOT NULL,
+            description TEXT,
+            gazetted BOOLEAN DEFAULT TRUE,
+            created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+        );
+
+        CREATE TABLE IF NOT EXISTS users (
+            id VARCHAR(64) PRIMARY KEY,
+            email VARCHAR(255) UNIQUE NOT NULL,
+            name VARCHAR(255) NOT NULL,
+            role VARCHAR(32) NOT NULL DEFAULT 'LEARNER',
+            status VARCHAR(32) DEFAULT 'ACTIVE',
+            auth_provider VARCHAR(32) DEFAULT 'CREDENTIALS',
+            password_hash VARCHAR(255),
+            password_salt VARCHAR(255),
+            created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+            last_login_at TIMESTAMP WITH TIME ZONE
+        );
+
+        CREATE TABLE IF NOT EXISTS official_profiles (
+            user_id VARCHAR(64) PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+            employee_id VARCHAR(64) UNIQUE NOT NULL,
+            department_id VARCHAR(64) REFERENCES departments(id),
+            current_role_id VARCHAR(64) REFERENCES roles(id),
+            target_role_id VARCHAR(64) REFERENCES roles(id),
+            cadre VARCHAR(64) NOT NULL,
+            pay_level INTEGER NOT NULL DEFAULT 11,
+            years_of_experience NUMERIC(4, 1) DEFAULT 5.0,
+            education VARCHAR(255),
+            specialization VARCHAR(255),
+            location VARCHAR(255),
+            preferred_language VARCHAR(64) DEFAULT 'English / Hindi',
+            training_hours NUMERIC(6, 1) DEFAULT 0.0,
+            role_readiness_score NUMERIC(5, 2) DEFAULT 75.0,
+            verified_skills_count INTEGER DEFAULT 0,
+            developing_skills_count INTEGER DEFAULT 0,
+            created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+        );
+
+        CREATE TABLE IF NOT EXISTS assignments (
+            id VARCHAR(64) PRIMARY KEY,
+            user_id VARCHAR(64) NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            title VARCHAR(255) NOT NULL,
+            department_id VARCHAR(64) REFERENCES departments(id),
+            start_date DATE NOT NULL,
+            end_date DATE,
+            is_current BOOLEAN DEFAULT TRUE,
+            role_in_project VARCHAR(128),
+            key_technologies JSONB DEFAULT '[]',
+            created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+        );
+
+        CREATE TABLE IF NOT EXISTS competency_framework (
+            id VARCHAR(64) PRIMARY KEY,
+            name VARCHAR(255) NOT NULL,
+            domain VARCHAR(64) NOT NULL,
+            description TEXT NOT NULL,
+            frac_aligned BOOLEAN DEFAULT TRUE,
+            version VARCHAR(16) DEFAULT '2.0',
+            created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+        );
+
+        CREATE TABLE IF NOT EXISTS competencies (
+            id VARCHAR(64) PRIMARY KEY,
+            framework_id VARCHAR(64) REFERENCES competency_framework(id),
+            code VARCHAR(32) UNIQUE NOT NULL,
+            name VARCHAR(255) NOT NULL,
+            domain VARCHAR(64) NOT NULL,
+            description TEXT NOT NULL,
+            weight NUMERIC(3, 2) DEFAULT 1.0,
+            level_1_rubric TEXT,
+            level_2_rubric TEXT,
+            level_3_rubric TEXT,
+            level_4_rubric TEXT,
+            level_5_rubric TEXT,
+            created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+        );
+
+        CREATE TABLE IF NOT EXISTS role_competency_requirements (
+            id VARCHAR(64) PRIMARY KEY,
+            role_id VARCHAR(64) NOT NULL REFERENCES roles(id) ON DELETE CASCADE,
+            competency_id VARCHAR(64) NOT NULL REFERENCES competencies(id) ON DELETE CASCADE,
+            required_level INTEGER NOT NULL CHECK (required_level BETWEEN 1 AND 5),
+            is_mandatory BOOLEAN DEFAULT TRUE,
+            priority VARCHAR(16) DEFAULT 'HIGH',
+            created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE (role_id, competency_id)
+        );
+
+        CREATE TABLE IF NOT EXISTS learner_competencies (
+            id VARCHAR(64) PRIMARY KEY,
+            user_id VARCHAR(64) NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            competency_id VARCHAR(64) NOT NULL REFERENCES competencies(id) ON DELETE CASCADE,
+            current_level INTEGER NOT NULL DEFAULT 1 CHECK (current_level BETWEEN 1 AND 5),
+            required_level INTEGER NOT NULL DEFAULT 3 CHECK (required_level BETWEEN 1 AND 5),
+            status VARCHAR(32) NOT NULL DEFAULT 'DEVELOPING',
+            gap_type VARCHAR(32) DEFAULT 'APPLICATION_GAP',
+            confidence NUMERIC(3, 2) DEFAULT 0.85,
+            trend VARCHAR(32) DEFAULT 'STABLE',
+            last_assessed_at TIMESTAMP WITH TIME ZONE,
+            target_date DATE,
+            diagnostic_score NUMERIC(5, 2),
+            practical_score NUMERIC(5, 2),
+            repeated_errors JSONB DEFAULT '[]',
+            evaluator_notes TEXT,
+            created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE (user_id, competency_id)
+        );
+
+        CREATE TABLE IF NOT EXISTS skill_gaps (
+            id VARCHAR(64) PRIMARY KEY,
+            user_id VARCHAR(64) NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            competency_id VARCHAR(64) NOT NULL REFERENCES competencies(id) ON DELETE CASCADE,
+            required_level INTEGER NOT NULL,
+            current_level INTEGER NOT NULL,
+            gap_magnitude INTEGER NOT NULL,
+            gap_type VARCHAR(32) NOT NULL,
+            priority VARCHAR(16) NOT NULL,
+            knowledge_gap_score NUMERIC(5, 2) DEFAULT 0.0,
+            application_gap_score NUMERIC(5, 2) DEFAULT 0.0,
+            retention_risk_score NUMERIC(5, 2) DEFAULT 0.0,
+            ai_diagnosis TEXT,
+            why_recommended JSONB DEFAULT '[]',
+            status VARCHAR(32) DEFAULT 'OPEN',
+            identified_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+            closed_at TIMESTAMP WITH TIME ZONE
+        );
+
+        CREATE TABLE IF NOT EXISTS courses (
+            id VARCHAR(64) PRIMARY KEY,
+            provider VARCHAR(64) NOT NULL DEFAULT 'iGOT Karmayogi',
+            title VARCHAR(255) NOT NULL,
+            description TEXT,
+            competency_id VARCHAR(64) REFERENCES competencies(id),
+            target_level INTEGER NOT NULL DEFAULT 3,
+            category VARCHAR(64) DEFAULT 'Official Statistics',
+            difficulty VARCHAR(32) DEFAULT 'Intermediate',
+            duration VARCHAR(64) NOT NULL,
+            rating NUMERIC(2, 1) DEFAULT 4.8,
+            enrolled_count INTEGER DEFAULT 0,
+            course_url TEXT NOT NULL,
+            is_frac_certified BOOLEAN DEFAULT TRUE,
+            created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+        );
+
+        CREATE TABLE IF NOT EXISTS training_programmes (
+            id VARCHAR(64) PRIMARY KEY,
+            academy VARCHAR(64) NOT NULL DEFAULT 'NSSTA',
+            title VARCHAR(255) NOT NULL,
+            category VARCHAR(64) NOT NULL,
+            duration VARCHAR(64) NOT NULL,
+            mode VARCHAR(64) NOT NULL DEFAULT 'In-Person (NSSTA Campus, Greater Noida)',
+            target_cadre VARCHAR(128) NOT NULL,
+            eligibility TEXT,
+            tpac_aligned BOOLEAN DEFAULT TRUE,
+            upcoming_batch_date VARCHAR(64),
+            seats_available INTEGER DEFAULT 25,
+            description TEXT,
+            curriculum_modules JSONB DEFAULT '[]',
+            created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+        );
+
+        CREATE TABLE IF NOT EXISTS assessments (
+            id VARCHAR(64) PRIMARY KEY,
+            title VARCHAR(255) NOT NULL,
+            competency_id VARCHAR(64) REFERENCES competencies(id),
+            description TEXT,
+            time_limit_minutes INTEGER DEFAULT 15,
+            passing_score INTEGER DEFAULT 70,
+            is_ai_generated BOOLEAN DEFAULT FALSE,
+            source_document_id VARCHAR(64),
+            created_by VARCHAR(64) REFERENCES users(id),
+            created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+        );
+
+        CREATE TABLE IF NOT EXISTS assessment_questions (
+            id VARCHAR(64) PRIMARY KEY,
+            assessment_id VARCHAR(64) NOT NULL REFERENCES assessments(id) ON DELETE CASCADE,
+            question_text TEXT NOT NULL,
+            options JSONB NOT NULL,
+            correct_answer_index INTEGER NOT NULL CHECK (correct_answer_index BETWEEN 0 AND 3),
+            explanation TEXT NOT NULL,
+            topic VARCHAR(128) NOT NULL,
+            difficulty VARCHAR(32) DEFAULT 'Medium',
+            order_index INTEGER DEFAULT 0
+        );
+
+        CREATE TABLE IF NOT EXISTS assessment_attempts (
+            id VARCHAR(64) PRIMARY KEY,
+            assessment_id VARCHAR(64) NOT NULL REFERENCES assessments(id) ON DELETE CASCADE,
+            user_id VARCHAR(64) NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            score_percentage NUMERIC(5, 2) NOT NULL,
+            total_questions INTEGER NOT NULL,
+            correct_answers_count INTEGER NOT NULL,
+            incorrect_answers_count INTEGER NOT NULL,
+            time_spent_seconds INTEGER NOT NULL,
+            passed BOOLEAN NOT NULL,
+            topic_scores JSONB DEFAULT '[]',
+            ai_conclusion TEXT,
+            updated_competency_level INTEGER,
+            gap_reduced BOOLEAN DEFAULT FALSE,
+            recommended_revision JSONB DEFAULT '[]',
+            completed_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+        );
+
+        CREATE TABLE IF NOT EXISTS assessment_answers (
+            id VARCHAR(64) PRIMARY KEY,
+            attempt_id VARCHAR(64) NOT NULL REFERENCES assessment_attempts(id) ON DELETE CASCADE,
+            question_id VARCHAR(64) NOT NULL REFERENCES assessment_questions(id) ON DELETE CASCADE,
+            selected_option_index INTEGER NOT NULL,
+            is_correct BOOLEAN NOT NULL,
+            time_taken_seconds INTEGER DEFAULT 0
+        );
+
+        CREATE TABLE IF NOT EXISTS learning_paths (
+            id VARCHAR(64) PRIMARY KEY,
+            user_id VARCHAR(64) NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            title VARCHAR(255) NOT NULL,
+            description TEXT,
+            target_role VARCHAR(255) NOT NULL,
+            progress_percentage NUMERIC(5, 2) DEFAULT 0.0,
+            estimated_total_hours NUMERIC(5, 1) DEFAULT 20.0,
+            status VARCHAR(32) DEFAULT 'IN_PROGRESS',
+            created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+        );
+
+        CREATE TABLE IF NOT EXISTS learning_progress (
+            id VARCHAR(64) PRIMARY KEY,
+            path_id VARCHAR(64) NOT NULL REFERENCES learning_paths(id) ON DELETE CASCADE,
+            step_number INTEGER NOT NULL,
+            title VARCHAR(255) NOT NULL,
+            provider VARCHAR(64) NOT NULL,
+            source_type VARCHAR(32) NOT NULL,
+            duration VARCHAR(64) NOT NULL,
+            status VARCHAR(32) DEFAULT 'PENDING',
+            score NUMERIC(5, 2),
+            competency_name VARCHAR(128),
+            external_link TEXT,
+            reason TEXT,
+            completed_at TIMESTAMP WITH TIME ZONE
+        );
+
+        CREATE TABLE IF NOT EXISTS recommendations (
+            id VARCHAR(64) PRIMARY KEY,
+            user_id VARCHAR(64) NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            competency_id VARCHAR(64) NOT NULL REFERENCES competencies(id) ON DELETE CASCADE,
+            rank_order INTEGER NOT NULL DEFAULT 1,
+            priority_level VARCHAR(16) DEFAULT 'HIGH',
+            impact_score NUMERIC(5, 2) DEFAULT 85.0,
+            reason TEXT NOT NULL,
+            igot_course_id VARCHAR(64) REFERENCES courses(id),
+            nssta_programme_id VARCHAR(64) REFERENCES training_programmes(id),
+            created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+        );
+
+        CREATE TABLE IF NOT EXISTS competency_evidence (
+            id VARCHAR(64) PRIMARY KEY,
+            user_id VARCHAR(64) NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            competency_id VARCHAR(64) NOT NULL REFERENCES competencies(id) ON DELETE CASCADE,
+            evidence_type VARCHAR(64) NOT NULL,
+            source_reference_id VARCHAR(64),
+            score_achieved NUMERIC(5, 2),
+            verified_by VARCHAR(64),
+            certificate_url TEXT,
+            verified_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+        );
+
+        CREATE TABLE IF NOT EXISTS uploaded_learning_materials (
+            id VARCHAR(64) PRIMARY KEY,
+            user_id VARCHAR(64) NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            file_name VARCHAR(255) NOT NULL,
+            file_size_bytes INTEGER NOT NULL,
+            file_type VARCHAR(64) DEFAULT 'application/pdf',
+            purpose VARCHAR(64) DEFAULT 'TRAINER_ASSESSMENT_GENERATION',
+            status VARCHAR(32) DEFAULT 'PROCESSED',
+            extracted_topics JSONB DEFAULT '[]',
+            executive_summary TEXT,
+            raw_text_excerpt TEXT,
+            generated_questions_count INTEGER DEFAULT 0,
+            uploaded_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+        );
+
+        CREATE TABLE IF NOT EXISTS audit_logs (
+            id VARCHAR(64) PRIMARY KEY,
+            user_id VARCHAR(64) REFERENCES users(id) ON DELETE SET NULL,
+            user_name VARCHAR(255),
+            action VARCHAR(64) NOT NULL,
+            details TEXT NOT NULL,
+            ip_address VARCHAR(64),
+            created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+        );
+
+        CREATE TABLE IF NOT EXISTS notifications (
+            id VARCHAR(64) PRIMARY KEY,
+            user_id VARCHAR(64) NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            title VARCHAR(255) NOT NULL,
+            message TEXT NOT NULL,
+            type VARCHAR(32) DEFAULT 'INFO',
+            read BOOLEAN DEFAULT FALSE,
+            created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
+        CREATE INDEX IF NOT EXISTS idx_learner_comp_user ON learner_competencies(user_id);
+        CREATE INDEX IF NOT EXISTS idx_skill_gaps_user ON skill_gaps(user_id);
+        CREATE INDEX IF NOT EXISTS idx_learning_path_user ON learning_paths(user_id);
+        CREATE INDEX IF NOT EXISTS idx_assessment_comp ON assessments(competency_id);
+        CREATE INDEX IF NOT EXISTS idx_audit_created ON audit_logs(created_at DESC);
+      `;
+
+      const client = await pool.connect();
+      try {
+        await client.query(schemaSql);
+        return res.status(200).json({ success: true, message: 'Schema deployed successfully to PostgreSQL database.' });
+      } catch (err: any) {
+        return res.status(500).json({ success: false, error: err?.message || String(err) });
+      } finally {
+        client.release();
+      }
+    }
+
+    if (method === 'GET' && (pathname === '/api/query-user' || pathname === '/query-user')) {
+      const userId = urlObj.searchParams.get('userId');
+      const email = urlObj.searchParams.get('email');
+      const pool = getHealthPool();
+      if (!pool) return res.status(500).json({ status: 'error', message: 'Pool init failed' });
+
+      const client = await pool.connect();
+      try {
+        let ures, pres;
+        if (userId) {
+          ures = await client.query('SELECT id, email, name, role, auth_provider, created_at, updated_at FROM users WHERE id = $1', [userId]);
+          pres = await client.query('SELECT user_id, employee_id, cadre, pay_level, education, location FROM official_profiles WHERE user_id = $1', [userId]);
+        } else if (email) {
+          ures = await client.query('SELECT id, email, name, role, auth_provider, created_at, updated_at FROM users WHERE email = $1', [email]);
+          const foundId = ures.rows[0]?.id;
+          pres = foundId ? await client.query('SELECT user_id, employee_id, cadre, pay_level, education, location FROM official_profiles WHERE user_id = $1', [foundId]) : { rows: [] };
+        } else {
+          ures = await client.query('SELECT id, email, name, role, auth_provider, created_at, updated_at FROM users ORDER BY created_at DESC LIMIT 10');
+          pres = await client.query('SELECT user_id, employee_id, cadre, pay_level, education, location FROM official_profiles ORDER BY created_at DESC LIMIT 10');
+        }
+        return res.status(200).json({
+          success: true,
+          users_rows: ures.rows,
+          profiles_rows: pres.rows,
+        });
+      } catch (err: any) {
+        return res.status(500).json({ success: false, error: err?.message || String(err) });
+      } finally {
+        client.release();
       }
     }
 
