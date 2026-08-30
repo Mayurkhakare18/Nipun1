@@ -1,5 +1,5 @@
-import { TPACMandate } from './tpac.types';
-import { MOCK_NSSTA_PROGRAMMES } from '../nssta/nssta.mock';
+import { TPACMandate } from './tpac.types.js';
+import { MOCK_NSSTA_PROGRAMMES } from '../nssta/nssta.mock.js';
 
 export const MOCK_TPAC_MANDATES: TPACMandate[] = [
   {

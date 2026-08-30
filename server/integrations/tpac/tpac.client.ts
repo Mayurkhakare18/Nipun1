@@ -1,7 +1,7 @@
-import type { TPACAdapter, TPACMandate } from './tpac.types';
-import type { NSSTAProgramme } from '../../../src/types';
-import { MOCK_TPAC_MANDATES } from './tpac.mock';
-import { MOCK_NSSTA_PROGRAMMES } from '../nssta/nssta.mock';
+import type { TPACAdapter, TPACMandate } from './tpac.types.js';
+import type { NSSTAProgramme } from '../../../src/types.js';
+import { MOCK_TPAC_MANDATES } from './tpac.mock.js';
+import { MOCK_NSSTA_PROGRAMMES } from '../nssta/nssta.mock.js';
 
 export class TPACClient implements TPACAdapter {
   private isConfigured: boolean;

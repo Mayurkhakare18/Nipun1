@@ -1,5 +1,5 @@
 import { GoogleGenAI } from '@google/genai';
-import type { QuizQuestion } from '../../src/types';
+import type { QuizQuestion } from '../../src/types.js';
 
 let genAIClient: GoogleGenAI | null = null;
 let lastQuotaExhaustedTime = 0;

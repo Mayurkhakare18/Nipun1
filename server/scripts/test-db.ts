@@ -3,7 +3,7 @@ import pg from 'pg';
 
 const { Pool } = pg;
 
-import { normalizeDatabaseUrl, getPostgresPoolConfig } from '../utils/db-url';
+import { normalizeDatabaseUrl, getPostgresPoolConfig } from '../utils/db-url.js';
 
 export { normalizeDatabaseUrl };
 

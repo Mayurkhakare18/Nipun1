@@ -1,6 +1,6 @@
-import type { IGOTCourse } from '../../../src/types';
-import type { IGOTAdapter } from './igot.types';
-import { MOCK_IGOT_COURSES } from './igot.mock';
+import type { IGOTCourse } from '../../../src/types.js';
+import type { IGOTAdapter } from './igot.types.js';
+import { MOCK_IGOT_COURSES } from './igot.mock.js';
 
 export class IGOTClient implements IGOTAdapter {
   private isConfigured: boolean;

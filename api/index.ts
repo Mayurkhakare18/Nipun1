@@ -1,4 +1,4 @@
-import { app } from '../server/app';
+import { app } from '../server/app.js';
 
 console.log('[BOOT] API function starting');
 console.log('[BOOT] Express initialized');

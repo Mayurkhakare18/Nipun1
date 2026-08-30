@@ -9,7 +9,7 @@ import type {
   UploadedDocument,
   AdminWorkforceMetrics,
   CompetencyUpgradeRecord,
-} from '../src/types';
+} from '../src/types.js';
 
 export interface UserCredential {
   userId: string;

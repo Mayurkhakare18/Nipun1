@@ -3761,7 +3761,7 @@ function getPostgresPoolConfig(rawUrl) {
 }
 
 // server/app.ts
-var { Pool } = pg;
+var Pool = pg.Pool || pg.default?.Pool || pg;
 var dbHealthPool = null;
 function getDbHealthPool() {
   const rawDatabaseUrl = process.env.DATABASE_URL;
