@@ -1,23 +1,39 @@
-import { app } from '../server/app.js';
+let appInstance: any = null;
 
-console.log('[BOOT] API function starting');
-console.log('[BOOT] Express initialized');
+async function getAppInstance() {
+  if (!appInstance) {
+    try {
+      const mod = await import('../server/app.js');
+      appInstance = mod.app || mod.default;
+    } catch (err: any) {
+      console.error('[BOOT_ERROR] Failed to load server/app.js:', err?.stack || err?.message || String(err));
+      throw err;
+    }
+  }
+  return appInstance;
+}
 
 export default async function handler(req: any, res: any) {
   // CORS Headers
-  res.setHeader('Access-Control-Allow-Credentials', 'true');
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'GET,OPTIONS,PATCH,DELETE,POST,PUT');
-  res.setHeader(
-    'Access-Control-Allow-Headers',
-    'X-CSRF-Token, X-Requested-With, Accept, Accept-Version, Content-Length, Content-MD5, Content-Type, Date, X-Api-Version, Authorization, x-auth-token'
-  );
+  try {
+    res.setHeader('Access-Control-Allow-Credentials', 'true');
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Methods', 'GET,OPTIONS,PATCH,DELETE,POST,PUT');
+    res.setHeader(
+      'Access-Control-Allow-Headers',
+      'X-CSRF-Token, X-Requested-With, Accept, Accept-Version, Content-Length, Content-MD5, Content-Type, Date, X-Api-Version, Authorization, x-auth-token'
+    );
 
-  if (req.method === 'OPTIONS') {
-    return res.status(200).end();
+    if (req.method === 'OPTIONS') {
+      return res.status(200).end();
+    }
+  } catch {
+    // Ignore header setting errors
   }
 
   try {
+    const app = await getAppInstance();
+
     // Reconstruct the exact original request URL for Express
     let originalPath = req.url || '/api';
     
@@ -57,16 +73,13 @@ export default async function handler(req: any, res: any) {
 
     return (app as any)(req, res);
   } catch (err: any) {
-    console.error('Vercel Serverless Function Unhandled Error:', err);
+    console.error('Vercel Serverless Function Unhandled Error:', err?.stack || err?.message || String(err));
     if (!res.headersSent) {
-      res.status(500).json({
+      return res.status(500).json({
         success: false,
-        error: 'INTERNAL_SERVER_ERROR',
-        message: err?.message || 'Server error occurred',
+        error: 'SERVERLESS_FUNCTION_ERROR',
+        message: err?.message || String(err),
       });
     }
   }
 }
-
-export { app };
-
