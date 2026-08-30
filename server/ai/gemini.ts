@@ -1,4 +1,4 @@
-import type { QuizQuestion } from '../../src/types.js';
+import type { QuizQuestion } from '../../src/types';
 
 let genAIClient: any = null;
 let lastQuotaExhaustedTime = 0;

@@ -1,11 +1,11 @@
-import { db } from '../db.js';
-import { generateAIGapDiagnosis } from '../ai/gemini.js';
+import { db } from '../db';
+import { generateAIGapDiagnosis } from '../ai/gemini';
 import type {
   UserProfile,
   LearnerCompetency,
   GapAnalysisResult,
   Competency,
-} from '../../src/types.js';
+} from '../../src/types';
 
 export interface LearnerProfileCompetencySummary {
   totalCompetencies: number;
