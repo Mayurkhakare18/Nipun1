@@ -1047,221 +1047,34 @@ export const INITIAL_WORKFORCE_METRICS: AdminWorkforceMetrics = {
 class InMemoryDatabase {
   public state: DatabaseState;
 
-  public hashPassword(password: string, salt: string): string {
-    return crypto.createHmac('sha256', salt).update(password).digest('hex');
-  }
 
-  public generateSalt(): string {
-    return crypto.randomBytes(16).toString('hex');
-  }
-
-  public createSession(userId: string): UserSession {
-    const expiresAt = Date.now() + 7 * 24 * 60 * 60 * 1000; // 7 days
-    const payload = JSON.stringify({ userId, expiresAt, nonce: crypto.randomBytes(8).toString('hex') });
-    const payloadB64 = Buffer.from(payload).toString('base64url');
-    const secret = process.env.SESSION_SECRET || 'nipun-mospi-secret-key-2026-iss-nssta-statvia';
-    const signature = crypto.createHmac('sha256', secret).update(payloadB64).digest('base64url');
-    const token = `statvia_sec_${payloadB64}.${signature}`;
-
-    const session: UserSession = {
-      token,
-      userId,
-      createdAt: new Date().toISOString(),
-      expiresAt,
-    };
-    this.state.sessions[token] = session;
-    return session;
-  }
-
-  public validateSession(token: string): UserSession | null {
-    if (!token) return null;
-
-    // 1. Check in-memory cache first if available
-    const cached = this.state.sessions[token];
-    if (cached) {
-      if (Date.now() > cached.expiresAt) {
-        delete this.state.sessions[token];
-        return null;
-      }
-      return cached;
-    }
-
-    // 2. Cryptographically verify stateless HMAC token across serverless cold starts
-    if (token.startsWith('statvia_sec_')) {
-      const rest = token.substring('statvia_sec_'.length);
-      const parts = rest.split('.');
-      if (parts.length === 2) {
-        const [payloadB64, signature] = parts;
-        const secret = process.env.SESSION_SECRET || 'nipun-mospi-secret-key-2026-iss-nssta-statvia';
-        const expectedSig = crypto.createHmac('sha256', secret).update(payloadB64).digest('base64url');
-        
-        // Constant-time comparison
-        const sigBuf = Buffer.from(signature);
-        const expBuf = Buffer.from(expectedSig);
-        if (sigBuf.length === expBuf.length && crypto.timingSafeEqual(sigBuf, expBuf)) {
-          try {
-            const data = JSON.parse(Buffer.from(payloadB64, 'base64url').toString('utf8'));
-            if (data.userId && data.expiresAt && Date.now() < data.expiresAt) {
-              const session: UserSession = {
-                token,
-                userId: data.userId,
-                createdAt: new Date(data.expiresAt - 7 * 24 * 60 * 60 * 1000).toISOString(),
-                expiresAt: data.expiresAt,
-              };
-              // Cache locally in this process instance
-              this.state.sessions[token] = session;
-              return session;
-            }
-          } catch {}
-        }
-      }
-    }
-
-    return null;
-  }
-
-  public removeSession(token: string): void {
-    if (token && this.state.sessions[token]) {
-      delete this.state.sessions[token];
-    }
-  }
-
-  public registerUserCredential(userId: string, email: string, password: string): UserCredential {
-    const salt = this.generateSalt();
-    const passwordHash = this.hashPassword(password, salt);
-    const credential: UserCredential = {
-      userId,
-      email: email.trim().toLowerCase(),
-      salt,
-      passwordHash,
-      createdAt: new Date().toISOString(),
-    };
-    this.state.userCredentials[email.trim().toLowerCase()] = credential;
-    return credential;
-  }
-
-  public verifyCredentials(identifier: string, password: string): { success: boolean; user?: UserProfile; message?: string } {
-    let normalized = identifier.trim().toLowerCase();
-    
-    // Support aliases between UI and DB
-    if (normalized === 'rajesh.verma@mospi.gov.in') {
-      normalized = 'r.rao@nssta.gov.in';
-    } else if (normalized === 'vikram.sen@mospi.gov.in') {
-      normalized = 'sanjay.deshmukh@nic.in';
-    }
-
-    // Check user profiles by email, full name, username prefix, or ID
-    let matchedUser = Object.values(this.state.users).find(
-      (u) =>
-        u.email.toLowerCase() === normalized ||
-        u.name.toLowerCase() === normalized ||
-        u.email.split('@')[0].toLowerCase() === normalized ||
-        u.id.toLowerCase() === normalized ||
-        (normalized === 'r.rao@nssta.gov.in' && u.role === 'TRAINER') ||
-        (normalized === 'sanjay.deshmukh@nic.in' && u.role === 'ADMINISTRATOR')
-    );
-
-    const cred = matchedUser
-      ? this.state.userCredentials[matchedUser.email.toLowerCase()] || this.state.userCredentials[normalized]
-      : this.state.userCredentials[normalized];
-
-    // If OTP verification mode
-    if (password === 'OTP-VERIFIED') {
-      if (!matchedUser) {
-        // Auto-provision an official officer account for seamless OTP login
-        const newId = `user-otp-${Date.now()}`;
-        const namePart = identifier.includes('@') ? identifier.split('@')[0].replace(/[._-]/g, ' ') : identifier;
-        const formattedName = namePart
-          .split(' ')
-          .map((s) => s.charAt(0).toUpperCase() + s.slice(1))
-          .join(' ') || 'Statistical Officer';
-
-        matchedUser = {
-          id: newId,
-          name: formattedName,
-          email: identifier.includes('@') ? identifier.trim().toLowerCase() : `${normalized.replace(/\s+/g, '.')}@mospi.gov.in`,
-          role: 'LEARNER',
-          employeeId: `MOSPI-${Math.floor(1000 + Math.random() * 9000)}`,
-          ministry: 'Ministry of Statistics & Programme Implementation (MoSPI)',
-          department: 'National Statistical Office (NSO)',
-          organization: 'Government of India',
-          designation: 'Senior Statistical Officer',
-          currentRole: 'Senior Statistical Officer',
-          targetRole: 'Assistant Director / Lead Analyst',
-          level: 11,
-          cadre: 'Subordinate Statistical Service (SSS)',
-          yearsOfExperience: 4,
-          education: 'M.Sc. Statistics',
-          specialization: 'Survey Design & Official Statistics',
-          location: 'New Delhi',
-          preferredLanguage: 'English / Hindi',
-          previousRoles: ['Junior Statistical Officer'],
-          currentProjects: ['Statistical Data Architecture & Modernization'],
-          technologiesUsed: ['Python', 'CSPro', 'Excel'],
-          trainingHours: 0,
-          roleReadiness: 78,
-          verifiedSkillsCount: 12,
-          developingSkillsCount: 3,
-        };
-        this.state.users[newId] = matchedUser;
-        this.state.learnerCompetencies[newId] = (this.state.learnerCompetencies['user-learner-01'] || []).map((c) => ({ ...c }));
-        this.state.gapAnalysis[newId] = (this.state.gapAnalysis['user-learner-01'] || []).map((g) => ({ ...g }));
-      }
-      return { success: true, user: matchedUser };
-    }
-
-    if (!matchedUser) {
-      return { success: false, message: 'No registered officer found with this email or username. Please check the spelling or register an account.' };
-    }
-
-    const userEmail = matchedUser.email.toLowerCase();
-
-    if (!cred) {
-      // If user exists in default seeds with known default credentials
-      const defaultPasses: Record<string, string[]> = {
-        'aarav.sharma@mospi.gov.in': ['Learner@2026', 'password', 'learner'],
-        'ananya.sharma@mospi.gov.in': ['Learner@2026', 'password', 'learner'],
-        'rajesh.verma@mospi.gov.in': ['Trainer@2026', 'password', 'trainer'],
-        'r.rao@nssta.gov.in': ['Trainer@2026', 'password', 'trainer'],
-        'vikram.sen@mospi.gov.in': ['Admin@2026', 'password', 'admin'],
-        'sanjay.deshmukh@nic.in': ['Admin@2026', 'password', 'admin'],
-      };
-      const allowed = defaultPasses[userEmail] || ['Learner@2026', 'Trainer@2026', 'Admin@2026', 'password'];
-      if (allowed.includes(password) || ['Learner@2026', 'Trainer@2026', 'Admin@2026', 'password'].includes(password)) {
-        // Auto-migrate credential
-        this.registerUserCredential(matchedUser.id, userEmail, password);
-        return { success: true, user: matchedUser };
-      }
-      return { success: false, message: 'Invalid password. Please check your official credentials.' };
-    }
-
-    const testHash = this.hashPassword(password, cred.salt);
-    if (testHash !== cred.passwordHash) {
-      // Also allow common default password for demo testing if needed
-      if (['Learner@2026', 'Trainer@2026', 'Admin@2026', 'password'].includes(password)) {
-        return { success: true, user: matchedUser };
-      }
-      return { success: false, message: 'Invalid password entered for this official account.' };
-    }
-
-    cred.lastLogin = new Date().toISOString();
-    return { success: true, user: matchedUser };
-  }
 
   constructor() {
+    const AARAV_UUID = 'a1111111-1111-4111-a111-111111111111';
+    const RAJESH_UUID = 'a2222222-2222-4222-a222-222222222222';
+    const VIKRAM_UUID = 'a3333333-3333-4333-a333-333333333333';
+
     this.state = {
-      users: { ...INITIAL_USERS },
+      users: {
+        ...INITIAL_USERS,
+        [AARAV_UUID]: { ...INITIAL_USERS['user-learner-01'], id: AARAV_UUID },
+        [RAJESH_UUID]: { ...INITIAL_USERS['user-trainer-01'], id: RAJESH_UUID },
+        [VIKRAM_UUID]: { ...INITIAL_USERS['user-admin-01'], id: VIKRAM_UUID },
+      },
       userCredentials: {},
       sessions: {},
       competencies: [...INITIAL_COMPETENCIES],
       learnerCompetencies: {
         'user-learner-01': [...INITIAL_LEARNER_COMPETENCIES],
+        [AARAV_UUID]: [...INITIAL_LEARNER_COMPETENCIES],
       },
       gapAnalysis: {
         'user-learner-01': [...INITIAL_GAP_ANALYSIS],
+        [AARAV_UUID]: [...INITIAL_GAP_ANALYSIS],
       },
       learningPaths: {
         'user-learner-01': JSON.parse(JSON.stringify(INITIAL_LEARNING_PATH)),
+        [AARAV_UUID]: JSON.parse(JSON.stringify(INITIAL_LEARNING_PATH)),
       },
       assessments: [...INITIAL_ASSESSMENTS],
       uploadedDocuments: [
@@ -1327,24 +1140,6 @@ class InMemoryDatabase {
       this.state.users['user-learner-01'] = { ...INITIAL_USERS['user-learner-01'] };
     }
 
-    // 2. Ensure official user credentials
-    if (!this.state.userCredentials) {
-      this.state.userCredentials = {};
-    }
-    const standardCreds = [
-      { id: 'user-learner-01', email: 'aarav.sharma@mospi.gov.in', pass: 'Learner@2026' },
-      { id: 'user-trainer-01', email: 'rajesh.verma@mospi.gov.in', pass: 'Trainer@2026' },
-      { id: 'user-admin-01', email: 'vikram.sen@mospi.gov.in', pass: 'Admin@2026' },
-      { id: 'user-learner-01', email: 'ananya.sharma@mospi.gov.in', pass: 'Learner@2026' },
-      { id: 'user-trainer-alias', email: 'r.rao@nssta.gov.in', pass: 'Trainer@2026' },
-      { id: 'user-admin-alias', email: 'sanjay.deshmukh@nic.in', pass: 'Admin@2026' },
-    ];
-    for (const c of standardCreds) {
-      const normalized = c.email.toLowerCase();
-      if (!this.state.userCredentials[normalized]) {
-        this.registerUserCredential(c.id, normalized, c.pass);
-      }
-    }
 
     // 3. Ensure master competencies catalog (all 15+ competencies)
     if (!this.state.competencies || this.state.competencies.length === 0) {
@@ -1396,12 +1191,6 @@ class InMemoryDatabase {
     this.state.users = { ...INITIAL_USERS };
     this.state.userCredentials = {};
     this.state.sessions = {};
-    this.registerUserCredential('user-learner-01', 'aarav.sharma@mospi.gov.in', 'Learner@2026');
-    this.registerUserCredential('user-trainer-01', 'rajesh.verma@mospi.gov.in', 'Trainer@2026');
-    this.registerUserCredential('user-admin-01', 'vikram.sen@mospi.gov.in', 'Admin@2026');
-    this.registerUserCredential('user-learner-01', 'ananya.sharma@mospi.gov.in', 'Learner@2026');
-    this.registerUserCredential('user-trainer-alias', 'r.rao@nssta.gov.in', 'Trainer@2026');
-    this.registerUserCredential('user-admin-alias', 'sanjay.deshmukh@nic.in', 'Admin@2026');
     this.state.competencies = [...INITIAL_COMPETENCIES];
     this.state.learnerCompetencies['user-learner-01'] = [...INITIAL_LEARNER_COMPETENCIES];
     this.state.gapAnalysis['user-learner-01'] = [...INITIAL_GAP_ANALYSIS];

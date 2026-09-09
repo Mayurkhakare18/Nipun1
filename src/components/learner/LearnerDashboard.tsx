@@ -1,6 +1,7 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { useAuth } from '../../context/AuthContext';
 import { api } from '../../services/api';
+import { useRealtimeSubscription } from '../../hooks/useRealtimeSubscription';
 import { GapAnalysisResult, LearningPath, UnifiedRecommendation } from '../../types';
 import { calculateNextPrioritySkill, PrioritySkillRecommendation } from '../../utils/prioritySkill';
 import {
@@ -54,55 +55,83 @@ export const LearnerDashboard: React.FC = () => {
   const [searchFilter, setSearchFilter] = useState('');
   const [isLoading, setIsLoading] = useState(true);
 
-  useEffect(() => {
-    let isMounted = true;
-    const loadDashboardData = async () => {
-      try {
-        setIsLoading(true);
-        const [gapsResult, pathResult, recsResult] = await Promise.allSettled([
-          api.getLearnerGaps(),
-          api.getLearningPath(),
-          api.getUnifiedRecommendations(),
-        ]);
+  const loadDashboardData = useCallback(async () => {
+    try {
+      setIsLoading(true);
+      const [gapsResult, pathResult, recsResult] = await Promise.allSettled([
+        api.getLearnerGaps(),
+        api.getLearningPath(),
+        api.getUnifiedRecommendations(),
+      ]);
 
-        if (!isMounted) return;
+      let activeGaps = gaps;
+      let activeRecs = recommendations;
 
-        let activeGaps = gaps;
-        let activeRecs = recommendations;
-
-        if (gapsResult.status === 'fulfilled' && gapsResult.value.success && gapsResult.value.gaps?.length) {
-          activeGaps = gapsResult.value.gaps;
-          setGaps(activeGaps);
-        }
-        if (recsResult.status === 'fulfilled' && recsResult.value.success && recsResult.value.recommendations?.length) {
-          activeRecs = recsResult.value.recommendations;
-          setRecommendations(activeRecs);
-        }
-        if (pathResult.status === 'fulfilled' && pathResult.value.success && pathResult.value.learningPath) {
-          setLearningPath(pathResult.value.learningPath);
-        }
-
-        const computed = calculateNextPrioritySkill(
-          currentUser,
-          activeGaps,
-          competencies,
-          activeRecs
-        );
-        setActivePrioritySkill(computed || authPrioritySkill);
-      } catch (err) {
-        console.warn('Dashboard data fetch notification:', err);
-      } finally {
-        if (isMounted) {
-          setIsLoading(false);
-        }
+      if (gapsResult.status === 'fulfilled' && gapsResult.value.success && gapsResult.value.gaps?.length) {
+        activeGaps = gapsResult.value.gaps;
+        setGaps(activeGaps);
       }
-    };
+      if (recsResult.status === 'fulfilled' && recsResult.value.success && recsResult.value.recommendations?.length) {
+        activeRecs = recsResult.value.recommendations;
+        setRecommendations(activeRecs);
+      }
+      if (pathResult.status === 'fulfilled' && pathResult.value.success && pathResult.value.learningPath) {
+        setLearningPath(pathResult.value.learningPath);
+      }
 
-    loadDashboardData();
-    return () => {
-      isMounted = false;
-    };
+      const computed = calculateNextPrioritySkill(
+        currentUser,
+        activeGaps,
+        competencies,
+        activeRecs
+      );
+      setActivePrioritySkill(computed || authPrioritySkill);
+    } catch (err) {
+      console.warn('Dashboard data fetch notification:', err);
+    } finally {
+      setIsLoading(false);
+    }
   }, [currentUser, competencies, authPrioritySkill]);
+
+  useEffect(() => {
+    loadDashboardData();
+  }, [loadDashboardData]);
+
+  const userFilter = currentUser ? `user_id=eq.${currentUser.id}` : undefined;
+
+  // Realtime Subscriptions for Learner Dashboard
+  useRealtimeSubscription({
+    table: 'learner_competencies',
+    filter: userFilter,
+    enabled: !!currentUser,
+    onPayload: useCallback(() => {
+      loadDashboardData();
+    }, [loadDashboardData]),
+  });
+
+  useRealtimeSubscription({
+    table: 'skill_gaps',
+    filter: userFilter,
+    enabled: !!currentUser,
+    onPayload: useCallback(() => {
+      loadDashboardData();
+    }, [loadDashboardData]),
+  });
+
+  useRealtimeSubscription({
+    table: 'notifications',
+    filter: userFilter,
+    enabled: !!currentUser,
+    onPayload: useCallback((payload) => {
+      if (payload.eventType === 'INSERT' && payload.new) {
+        showNotification(
+          payload.new.title || 'Official Notification',
+          payload.new.message || 'Updated competency passport item.',
+          'info'
+        );
+      }
+    }, [showNotification]),
+  });
 
   const pSkill = activePrioritySkill || authPrioritySkill;
 

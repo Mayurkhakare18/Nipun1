@@ -1,6 +1,7 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { useAuth } from '../../context/AuthContext';
 import { api } from '../../services/api';
+import { useRealtimeSubscription } from '../../hooks/useRealtimeSubscription';
 import { WorkforceOverview } from '../../types';
 import {
   Users,
@@ -25,23 +26,44 @@ export const WorkforceDashboard: React.FC = () => {
   const [selectedCadre, setSelectedCadre] = useState<string>('ALL');
   const [isLoading, setIsLoading] = useState<boolean>(true);
 
-  useEffect(() => {
-    const fetchWorkforce = async () => {
-      try {
-        setIsLoading(true);
-        const res = await api.getWorkforceOverview();
-        if (res.success && res.workforce) {
-          setWorkforceData(res.workforce);
-        }
-      } catch (err) {
-        console.error('Failed to load workforce data:', err);
-      } finally {
-        setIsLoading(false);
+  const fetchWorkforce = useCallback(async () => {
+    try {
+      setIsLoading(true);
+      const res = await api.getWorkforceOverview();
+      if (res.success && res.workforce) {
+        setWorkforceData(res.workforce);
       }
-    };
-
-    fetchWorkforce();
+    } catch (err) {
+      console.error('Failed to load workforce data:', err);
+    } finally {
+      setIsLoading(false);
+    }
   }, []);
+
+  useEffect(() => {
+    fetchWorkforce();
+  }, [fetchWorkforce]);
+
+  // Realtime Subscriptions for Workforce Analytics
+  useRealtimeSubscription({
+    table: 'users',
+    onPayload: useCallback(() => {
+      fetchWorkforce();
+    }, [fetchWorkforce]),
+  });
+
+  useRealtimeSubscription({
+    table: 'audit_logs',
+    onPayload: useCallback((payload) => {
+      if (payload.eventType === 'INSERT' && payload.new) {
+        showNotification(
+          'System Activity Event',
+          `${payload.new.action || 'System action'} recorded by ${payload.new.user || 'Officer'}.`,
+          'info'
+        );
+      }
+    }, [showNotification]),
+  });
 
   const handleExportReport = () => {
     showNotification(

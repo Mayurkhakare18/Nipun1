@@ -1,5 +1,6 @@
 import express, { type Request, type Response } from 'express';
 import pg from 'pg';
+import { createClient } from '@supabase/supabase-js';
 
 const expressFn = (express as any).default || express;
 
@@ -67,10 +68,25 @@ export function createExpressApp() {
 
   // CORS & Preflight handling for Vercel and production environments
   app.use((req, res, next) => {
-    res.setHeader('Access-Control-Allow-Origin', '*');
+    const origin = req.headers.origin;
+    const allowedOrigins = [
+      process.env.CORS_ORIGIN,
+      'https://nipun-test.vercel.app',
+      'http://localhost:5173',
+      'http://localhost:3000',
+      'http://127.0.0.1:5173',
+    ].filter(Boolean) as string[];
+
+    if (origin && allowedOrigins.includes(origin)) {
+      res.setHeader('Access-Control-Allow-Origin', origin);
+      res.setHeader('Access-Control-Allow-Credentials', 'true');
+    } else if (!origin) {
+      res.setHeader('Access-Control-Allow-Origin', process.env.CORS_ORIGIN || 'https://nipun-test.vercel.app');
+      res.setHeader('Access-Control-Allow-Credentials', 'true');
+    }
+
     res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS, PATCH');
     res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, x-auth-token, X-Requested-With');
-    res.setHeader('Access-Control-Allow-Credentials', 'true');
 
     if (req.method === 'OPTIONS') {
       return res.status(200).end();
@@ -87,6 +103,8 @@ export function createExpressApp() {
       console.warn('[DB_SEED_WARN]', seedErr);
     }
     if (
+      process.env.VERCEL &&
+      req.url !== '/' &&
       !req.url.startsWith('/api') &&
       !req.url.startsWith('/assets') &&
       !req.url.startsWith('/dist') &&
@@ -102,23 +120,113 @@ export function createExpressApp() {
   app.use(express.json({ limit: '10mb' }));
   app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
-  // Global Active Session Tracker (default to Learner)
-  let currentUserId = 'user-learner-01';
+  // Supabase Auth server client for token verification
+  const supabaseUrl = process.env.VITE_SUPABASE_URL || 'https://dnrqtmadtmgizqdchrbk.supabase.co';
+  const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.VITE_SUPABASE_ANON_KEY || 'sb_publishable_9LZsLZRp9E34czzgwxKAcg_16Ki63lw';
+  const serverSupabase = createClient(supabaseUrl, supabaseKey);
 
-  // Helper to securely resolve the authenticated user from session token or active fallback
-  function resolveUser(req: Request): UserProfile | null {
+  const tokenVerificationCache = new Map<string, { user: UserProfile; expiresAt: number }>();
+
+  async function verifySupabaseToken(token: string): Promise<UserProfile | null> {
+    if (!token) return null;
+    const cached = tokenVerificationCache.get(token);
+    if (cached && cached.expiresAt > Date.now()) {
+      return cached.user;
+    }
+
+    try {
+      const { data: { user: authUser }, error } = await serverSupabase.auth.getUser(token);
+      if (error || !authUser) {
+        tokenVerificationCache.delete(token);
+        return null;
+      }
+
+      let appUser = db.state.users[authUser.id] || Object.values(db.state.users).find(u => u.email.toLowerCase() === authUser.email?.toLowerCase());
+
+      if (!appUser) {
+        const meta = authUser.user_metadata || {};
+        appUser = {
+          id: authUser.id,
+          name: meta.full_name || meta.name || authUser.email?.split('@')[0] || 'Official Officer',
+          email: authUser.email || '',
+          role: meta.role || 'LEARNER',
+          employeeId: meta.employeeId || `ISS-${authUser.id.substring(0, 8)}`,
+          ministry: meta.ministry || 'Ministry of Statistics & Programme Implementation (MoSPI)',
+          department: meta.department || 'National Statistical Office (NSO)',
+          organization: 'Government of India',
+          designation: meta.designation || 'Senior Statistical Officer',
+          currentRole: meta.designation || 'Senior Statistical Officer',
+          targetRole: meta.targetRole || 'Deputy Director (Statistics)',
+          level: meta.level || 11,
+          cadre: meta.cadre || 'Indian Statistical Service (ISS)',
+          yearsOfExperience: meta.yearsOfExperience || 5,
+          education: meta.education || 'M.Sc. Statistics',
+          specialization: meta.specialization || 'Survey Data Analysis & Official Statistics',
+          location: meta.location || 'New Delhi',
+          preferredLanguage: 'English / Hindi',
+          previousRoles: ['Junior Statistical Officer'],
+          currentProjects: ['National Indicator Framework (NIF) Tracking'],
+          technologiesUsed: ['Python', 'SQL', 'R'],
+          trainingHours: 24,
+          roleReadiness: 80,
+          verifiedSkillsCount: 12,
+          developingSkillsCount: 3,
+        };
+        db.state.users[authUser.id] = appUser;
+        const seedComps = db.state.learnerCompetencies['a1111111-1111-4111-a111-111111111111'] || db.state.learnerCompetencies['user-learner-01'] || [];
+        const seedGaps = db.state.gapAnalysis['a1111111-1111-4111-a111-111111111111'] || db.state.gapAnalysis['user-learner-01'] || [];
+        const seedPath = db.state.learningPaths['a1111111-1111-4111-a111-111111111111'] || db.state.learningPaths['user-learner-01'];
+
+        db.state.learnerCompetencies[authUser.id] = seedComps.map(c => ({ ...c }));
+        db.state.gapAnalysis[authUser.id] = seedGaps.map(g => ({ ...g }));
+        if (seedPath) {
+          db.state.learningPaths[authUser.id] = JSON.parse(JSON.stringify(seedPath));
+        }
+      } else if (appUser.id !== authUser.id) {
+        db.state.users[authUser.id] = { ...appUser, id: authUser.id };
+        if (!db.state.learnerCompetencies[authUser.id] && db.state.learnerCompetencies[appUser.id]) {
+          db.state.learnerCompetencies[authUser.id] = db.state.learnerCompetencies[appUser.id];
+        }
+        if (!db.state.gapAnalysis[authUser.id] && db.state.gapAnalysis[appUser.id]) {
+          db.state.gapAnalysis[authUser.id] = db.state.gapAnalysis[appUser.id];
+        }
+        if (!db.state.learningPaths[authUser.id] && db.state.learningPaths[appUser.id]) {
+          db.state.learningPaths[authUser.id] = db.state.learningPaths[appUser.id];
+        }
+        appUser = db.state.users[authUser.id];
+      }
+
+      tokenVerificationCache.set(token, {
+        user: appUser,
+        expiresAt: Date.now() + 3 * 60 * 1000,
+      });
+
+      return appUser;
+    } catch (err) {
+      console.error('[SupabaseAuth] Server token verification failed:', err);
+      return null;
+    }
+  }
+
+  // Middleware to authenticate via Supabase Access Token
+  app.use(async (req, res, next) => {
     const authHeader = req.headers['authorization'] || req.headers['x-auth-token'];
     let token: string | undefined;
     if (typeof authHeader === 'string') {
       token = authHeader.startsWith('Bearer ') ? authHeader.substring(7).trim() : authHeader.trim();
     }
     if (token) {
-      const session = db.validateSession(token);
-      if (session && db.state.users[session.userId]) {
-        return db.state.users[session.userId];
+      const authenticatedUser = await verifySupabaseToken(token);
+      if (authenticatedUser) {
+        (req as any).user = authenticatedUser;
       }
     }
-    return db.state.users[currentUserId] || db.state.users['user-learner-01'] || null;
+    next();
+  });
+
+  // Helper to resolve the authenticated user strictly derived from verified Supabase session
+  function resolveUser(req: Request): UserProfile | null {
+    return (req as any).user || null;
   }
 
   // ==========================================
@@ -187,28 +295,14 @@ export function createExpressApp() {
   // 1. REAL AUTH & SESSION API
   // ==========================================
   app.get('/api/auth/current-user', (req, res) => {
-    const authHeader = req.headers['authorization'] || req.headers['x-auth-token'];
-    let token: string | undefined;
-    if (typeof authHeader === 'string') {
-      token = authHeader.startsWith('Bearer ') ? authHeader.substring(7).trim() : authHeader.trim();
+    const user = resolveUser(req);
+    if (user) {
+      return res.json({ success: true, user, isAuthenticated: true });
     }
-
-    if (token) {
-      const session = db.validateSession(token);
-      if (session && db.state.users[session.userId]) {
-        const user = db.state.users[session.userId];
-        currentUserId = user.id;
-        return res.json({ success: true, user, isAuthenticated: true });
-      } else {
-        return res.status(401).json({ success: false, user: null, isAuthenticated: false, message: 'Session expired or invalid.' });
-      }
-    }
-
-    const user = db.state.users[currentUserId] || db.state.users['user-learner-01'];
-    res.json({ success: true, user, isAuthenticated: !!user });
+    return res.status(401).json({ success: false, user: null, isAuthenticated: false, message: 'Authentication required. Please log in.' });
   });
 
-  app.post('/api/auth/register', (req, res) => {
+  app.post('/api/auth/register', async (req, res) => {
     const {
       name,
       email,
@@ -229,79 +323,96 @@ export function createExpressApp() {
 
     const normalizedEmail = email.trim().toLowerCase();
 
-    // Check if email already registered in the official database
-    const existingCred = db.state.userCredentials[normalizedEmail];
-    const existingUser = Object.values(db.state.users).find(
-      (u) => u.email.toLowerCase() === normalizedEmail
-    );
-
-    if (existingCred || existingUser) {
-      return res.status(409).json({
-        success: false,
-        message: 'An officer account is already registered with this official email address. Please sign in.',
+    try {
+      // 1. Create and confirm user in Supabase Auth authority
+      const { data: createdUser, error: createError } = await serverSupabase.auth.admin.createUser({
+        email: normalizedEmail,
+        password: password || 'Learner@2026',
+        email_confirm: true,
+        user_metadata: {
+          name: name.trim(),
+          role: (role as any) || 'LEARNER',
+          designation: designation || 'Senior Statistical Officer',
+          ministry: ministry || 'Ministry of Statistics & Programme Implementation (MoSPI)',
+          department: department || 'National Statistical Office (NSO)',
+          cadre: cadre || 'Subordinate Statistical Service (SSS)',
+        },
       });
+
+      if (createError) {
+        return res.status(409).json({
+          success: false,
+          message: createError.message || 'An officer account is already registered with this official email address.',
+        });
+      }
+
+      const authUserId = createdUser.user.id;
+
+      // 2. Sign in to obtain live Supabase session token
+      const { data: signData, error: signError } = await serverSupabase.auth.signInWithPassword({
+        email: normalizedEmail,
+        password: password || 'Learner@2026',
+      });
+
+      const token = signData?.session?.access_token || '';
+
+      const newUser: UserProfile = {
+        id: authUserId,
+        name: name.trim(),
+        email: normalizedEmail,
+        role: (role as any) || 'LEARNER',
+        employeeId: employeeId || `MOSPI-${Math.floor(1000 + Math.random() * 9000)}`,
+        ministry: ministry || 'Ministry of Statistics & Programme Implementation (MoSPI)',
+        department: department || 'National Statistical Office (NSO)',
+        organization: 'Government of India',
+        designation: designation || 'Senior Statistical Officer',
+        currentRole: designation || 'Senior Statistical Officer',
+        targetRole: 'Assistant Director / Lead Analyst',
+        level: 11,
+        cadre: cadre || 'Subordinate Statistical Service (SSS)',
+        yearsOfExperience: 4,
+        education: 'Post Graduate / Master in Statistics',
+        specialization: specialization || 'Survey Statistics & Applied Data Science',
+        location: location || 'New Delhi, Headquarters',
+        preferredLanguage: 'English / Hindi',
+        previousRoles: ['Junior Statistical Officer'],
+        currentProjects: ['Statistical Data Architecture & Modernization'],
+        technologiesUsed: ['Python', 'SQL', 'R Studio', 'Excel / CSPro'],
+        trainingHours: 0,
+        roleReadiness: 75,
+        verifiedSkillsCount: 10,
+        developingSkillsCount: 4,
+      };
+
+      // Store in memory cache
+      db.state.users[authUserId] = newUser;
+
+      // Clone base competencies and initial gaps for newly registered officer
+      const baseComps = db.state.learnerCompetencies['95f70a45-319f-434b-bbe8-9f146749e96a'] || db.state.learnerCompetencies['a1111111-1111-4111-a111-111111111111'] || db.state.learnerCompetencies['user-learner-01'] || [];
+      const baseGaps = db.state.gapAnalysis['95f70a45-319f-434b-bbe8-9f146749e96a'] || db.state.gapAnalysis['a1111111-1111-4111-a111-111111111111'] || db.state.gapAnalysis['user-learner-01'] || [];
+      db.state.learnerCompetencies[authUserId] = baseComps.map((c) => ({ ...c }));
+      db.state.gapAnalysis[authUserId] = baseGaps.map((g) => ({ ...g }));
+
+      db.state.auditLogs.unshift({
+        id: `log-${Date.now()}`,
+        timestamp: new Date().toISOString(),
+        user: name,
+        action: 'USER_REGISTERED',
+        details: `New ${role} account registered in Supabase Auth (${authUserId}).`,
+      });
+
+      res.status(201).json({
+        success: true,
+        user: newUser,
+        token,
+        message: 'Official account successfully registered in Supabase Auth and session established.',
+      });
+    } catch (err: any) {
+      res.status(500).json({ success: false, message: err?.message || 'Registration failed' });
     }
-
-    const newUserId = `user-${Date.now()}`;
-    const newUser: UserProfile = {
-      id: newUserId,
-      name: name.trim(),
-      email: normalizedEmail,
-      role: (role as any) || 'LEARNER',
-      employeeId: employeeId || `MOSPI-${Math.floor(1000 + Math.random() * 9000)}`,
-      ministry: ministry || 'Ministry of Statistics & Programme Implementation (MoSPI)',
-      department: department || 'National Statistical Office (NSO)',
-      organization: 'Government of India',
-      designation: designation || 'Senior Statistical Officer',
-      currentRole: designation || 'Senior Statistical Officer',
-      targetRole: 'Assistant Director / Lead Analyst',
-      level: 11,
-      cadre: cadre || 'Subordinate Statistical Service (SSS)',
-      yearsOfExperience: 4,
-      education: 'Post Graduate / Master in Statistics',
-      specialization: specialization || 'Survey Statistics & Applied Data Science',
-      location: location || 'New Delhi, Headquarters',
-      preferredLanguage: 'English / Hindi',
-      previousRoles: ['Junior Statistical Officer'],
-      currentProjects: ['Statistical Data Architecture & Modernization'],
-      technologiesUsed: ['Python', 'SQL', 'R Studio', 'Excel / CSPro'],
-      trainingHours: 0,
-      roleReadiness: 75,
-      verifiedSkillsCount: 10,
-      developingSkillsCount: 4,
-    };
-
-    // Store user profile and securely hash password into credentials table
-    db.state.users[newUserId] = newUser;
-    db.registerUserCredential(newUserId, normalizedEmail, password || 'Learner@2026');
-
-    // Clone base competencies and initial gaps for newly registered officer
-    db.state.learnerCompetencies[newUserId] = (db.state.learnerCompetencies['user-learner-01'] || []).map(
-      (c) => ({ ...c })
-    );
-    db.state.gapAnalysis[newUserId] = (db.state.gapAnalysis['user-learner-01'] || []).map((g) => ({ ...g }));
-
-    // Create secure session token
-    const session = db.createSession(newUserId);
-    currentUserId = newUserId;
-
-    db.state.auditLogs.unshift({
-      id: `log-${Date.now()}`,
-      timestamp: new Date().toISOString(),
-      user: name,
-      action: 'USER_REGISTERED',
-      details: `New ${role} account registered with designation ${designation || 'Statistical Officer'} under ${ministry || 'MoSPI'}.`,
-    });
-
-    res.status(201).json({
-      success: true,
-      user: newUser,
-      token: session.token,
-      message: 'Official account successfully registered and session established.',
-    });
   });
 
-  app.post('/api/auth/login', (req, res) => {
+  app.post('/api/auth/login', async (req, res) => {
     const { email, username, identifier, password } = req.body;
     const loginIdentifier = email || username || identifier;
 
@@ -313,163 +424,68 @@ export function createExpressApp() {
       return res.status(400).json({ success: false, message: 'Please enter your account password.' });
     }
 
-    const verifyResult = db.verifyCredentials(loginIdentifier, password);
-
-    if (!verifyResult.success || !verifyResult.user) {
-      return res.status(401).json({
-        success: false,
-        message: verifyResult.message || 'Invalid email, username or password. Please verify your credentials.',
+    try {
+      const { data, error } = await serverSupabase.auth.signInWithPassword({
+        email: loginIdentifier,
+        password,
       });
-    }
 
-    const matchedUser = verifyResult.user;
-    currentUserId = matchedUser.id;
-    const session = db.createSession(matchedUser.id);
-
-    db.state.auditLogs.unshift({
-      id: `log-${Date.now()}`,
-      timestamp: new Date().toISOString(),
-      user: matchedUser.name,
-      action: 'USER_LOGIN',
-      details: 'Officer authenticated successfully via verified database credentials.',
-    });
-
-    return res.json({
-      success: true,
-      user: matchedUser,
-      token: session.token,
-      message: `Welcome back, ${matchedUser.name}!`,
-    });
-  });
-
-  app.post('/api/auth/parichay-sso', (req, res) => {
-    const { ssoId = 'PARICHAY-GOI-9921', role = 'LEARNER' } = req.body;
-    const targetUserId =
-      role === 'TRAINER'
-        ? 'user-trainer-01'
-        : role === 'ADMINISTRATOR'
-        ? 'user-admin-01'
-        : 'user-learner-01';
-
-    currentUserId = targetUserId;
-    const user = db.state.users[targetUserId];
-    const session = db.createSession(targetUserId);
-
-    db.state.auditLogs.unshift({
-      id: `log-${Date.now()}`,
-      timestamp: new Date().toISOString(),
-      user: user.name,
-      action: 'PARICHAY_SSO_LOGIN',
-      details: `Authenticated via Jan-Parichay Single Sign-On token (${ssoId}).`,
-    });
-
-    res.json({
-      success: true,
-      user,
-      token: session.token,
-      message: `Verified via Jan-Parichay SSO: ${user.name} (${user.designation})`,
-    });
-  });
-
-  app.post(['/api/auth/google-verify', '/auth/google-verify'], (req, res) => {
-    const { email, name, googleUid } = req.body || {};
-    if (!email) {
-      return res.status(400).json({ success: false, message: 'Google account email required.' });
-    }
-
-    const cleanEmail = String(email).trim().toLowerCase();
-    const displayName = name ? String(name).trim() : cleanEmail.split('@')[0];
-
-    let existingUser = Object.values(db.state.users).find((u: any) => u.email.toLowerCase() === cleanEmail || (googleUid && u.id === googleUid));
-
-    if (!existingUser) {
-      const newUserId = googleUid ? googleUid : `google-user-${Date.now()}`;
-      existingUser = {
-        id: newUserId,
-        name: displayName,
-        email: cleanEmail,
-        role: 'LEARNER',
-        employeeId: `ISS-GOOG-${Math.floor(1000 + Math.random() * 9000)}`,
-        ministry: 'Ministry of Statistics & Programme Implementation (MoSPI)',
-        department: 'National Accounts Division (NAD)',
-        organization: 'Government of India',
-        designation: 'Senior Statistical Officer',
-        currentRole: 'Senior Statistical Officer',
-        targetRole: 'Assistant Director / Lead Analyst',
-        level: 11,
-        cadre: 'Subordinate Statistical Service (SSS)',
-        yearsOfExperience: 5,
-        education: 'M.Sc. Statistics / Data Science',
-        specialization: 'Survey Sampling & Automated Pipelines',
-        location: 'New Delhi, Headquarters',
-        preferredLanguage: 'English / Hindi',
-        previousRoles: ['Junior Statistical Officer'],
-        currentProjects: ['PLFS Statistical Processing'],
-        technologiesUsed: ['Python', 'SQL', 'R'],
-        trainingHours: 24,
-        roleReadiness: 78,
-        verifiedSkillsCount: 12,
-        developingSkillsCount: 3,
-      };
-      db.state.users[newUserId] = existingUser;
-      db.registerUserCredential(newUserId, cleanEmail, 'GoogleAuthUser@2026');
-      if (!db.state.learnerCompetencies[newUserId]) {
-        db.state.learnerCompetencies[newUserId] = [...(db.state.learnerCompetencies['user-learner-01'] || [])];
+      if (error || !data.user || !data.session) {
+        return res.status(401).json({
+          success: false,
+          message: error?.message || 'Invalid email or password. Please check your official credentials.',
+        });
       }
-      if (!db.state.gapAnalysis[newUserId]) {
-        db.state.gapAnalysis[newUserId] = [...(db.state.gapAnalysis['user-learner-01'] || [])];
-      }
-    }
 
-    const session = db.createSession(existingUser.id);
-    currentUserId = existingUser.id;
-    res.json({
-      success: true,
-      user: existingUser,
-      token: session.token,
-      message: `Welcome Officer ${existingUser.name}! Google session verified.`,
-    });
+      const matchedUser = await verifySupabaseToken(data.session.access_token);
+
+      db.state.auditLogs.unshift({
+        id: `log-${Date.now()}`,
+        timestamp: new Date().toISOString(),
+        user: matchedUser?.name || loginIdentifier,
+        action: 'USER_LOGIN',
+        details: 'Officer authenticated successfully via Supabase Auth.',
+      });
+
+      return res.json({
+        success: true,
+        user: matchedUser,
+        token: data.session.access_token,
+        message: `Welcome back, ${matchedUser?.name || 'Officer'}!`,
+      });
+    } catch (err: any) {
+      return res.status(500).json({ success: false, message: err?.message || 'Login error' });
+    }
   });
 
   app.post('/api/auth/logout', (req, res) => {
     const authHeader = req.headers['authorization'] || req.headers['x-auth-token'];
     if (typeof authHeader === 'string') {
       const token = authHeader.startsWith('Bearer ') ? authHeader.substring(7).trim() : authHeader.trim();
-      db.removeSession(token);
+      tokenVerificationCache.delete(token);
     }
-    currentUserId = 'user-learner-01';
-    res.json({ success: true, message: 'Logged out successfully.' });
+    res.json({ success: true, message: 'Logged out successfully from official session.' });
   });
 
-  app.post('/api/auth/switch-role', (req, res) => {
-    const { userId } = req.body;
-    if (db.state.users[userId]) {
-      currentUserId = userId;
-      const session = db.createSession(userId);
-      res.json({ success: true, user: db.state.users[userId], token: session.token });
-    } else {
-      res.status(404).json({ success: false, message: 'User not found' });
-    }
-  });
-
-  app.post('/api/auth/reset-demo', (req, res) => {
-    db.resetDemoData();
-    currentUserId = 'user-learner-01';
-    res.json({ success: true, message: 'NIPUN Demo data reset to initial official baseline.' });
-  });
 
   // ==========================================
   // 2. PROFILE & PURPOSE MANAGEMENT
   // ==========================================
   app.get(['/api/profile', '/api/learner/profile'], (req, res) => {
-    const user = resolveUser(req) || db.state.users[currentUserId] || db.state.users['user-learner-01'];
+    const user = resolveUser(req);
+    if (!user) {
+      return res.status(401).json({ success: false, message: 'Authentication required. Please log in.' });
+    }
     res.json({ success: true, profile: user, ...user });
   });
 
   app.put(['/api/profile', '/api/learner/profile'], (req, res) => {
-    const user = resolveUser(req) || db.state.users[currentUserId];
+    const user = resolveUser(req);
+    if (!user) {
+      return res.status(401).json({ success: false, message: 'Authentication required. Please log in.' });
+    }
     const updates = req.body;
-    if (user && db.state.users[user.id]) {
+    if (db.state.users[user.id]) {
       db.state.users[user.id] = {
         ...db.state.users[user.id],
         ...updates,
@@ -490,10 +506,10 @@ export function createExpressApp() {
   // Dedicated endpoint when user selects and confirms a Capacity Building Purpose
   app.post('/api/learner/purpose', async (req, res) => {
     const { purposeId, title, targetRole } = req.body;
-    const user = db.state.users[currentUserId];
+    const user = resolveUser(req);
 
     if (!user) {
-      return res.status(404).json({ success: false, message: 'User not found' });
+      return res.status(401).json({ success: false, message: 'Authentication required. Please log in.' });
     }
 
     // Update user profile with purpose
@@ -804,7 +820,7 @@ export function createExpressApp() {
     };
 
     const assignedComps = purposeCompetencyMap[purposeId] || purposeCompetencyMap['promotion-progression'];
-    db.state.learnerCompetencies[currentUserId] = assignedComps;
+    db.state.learnerCompetencies[user.id] = assignedComps;
 
     // Generate immediate individualized gaps
     const newGaps: GapAnalysisResult[] = [];
@@ -847,7 +863,7 @@ export function createExpressApp() {
       }
     }
 
-    db.state.gapAnalysis[currentUserId] = newGaps;
+    db.state.gapAnalysis[user.id] = newGaps;
 
     db.state.auditLogs.unshift({
       id: `log-${Date.now()}`,
@@ -875,7 +891,10 @@ export function createExpressApp() {
 
   app.get('/api/learner/competencies', async (req, res) => {
     const user = resolveUser(req);
-    const result = await fetchLearnerProfileCompetencyData(user ? user.id : currentUserId);
+    if (!user) {
+      return res.status(401).json({ success: false, message: 'Authentication required. Please log in.' });
+    }
+    const result = await fetchLearnerProfileCompetencyData(user.id);
     res.json({ success: true, competencies: result.competencies, profile: result.profile });
   });
 
@@ -883,7 +902,10 @@ export function createExpressApp() {
   app.get('/api/learner/profile-competencies', async (req, res) => {
     try {
       const user = resolveUser(req);
-      const data = await fetchLearnerProfileCompetencyData(user ? user.id : currentUserId);
+      if (!user) {
+        return res.status(401).json({ success: false, message: 'Authentication required. Please log in.' });
+      }
+      const data = await fetchLearnerProfileCompetencyData(user.id);
       res.json(data);
     } catch (err: any) {
       console.error('Failed to fetch learner profile competencies from database:', err);
@@ -897,7 +919,10 @@ export function createExpressApp() {
   app.get('/api/learner/gaps', async (req, res) => {
     try {
       const user = resolveUser(req);
-      const data = await fetchLearnerProfileCompetencyData(user ? user.id : currentUserId);
+      if (!user) {
+        return res.status(401).json({ success: false, message: 'Authentication required. Please log in.' });
+      }
+      const data = await fetchLearnerProfileCompetencyData(user.id);
       res.json({
         success: true,
         gaps: data.gaps,
@@ -915,7 +940,10 @@ export function createExpressApp() {
   app.post('/api/learner/run-gap-check', async (req, res) => {
     try {
       const user = resolveUser(req);
-      const data = await recalibrateLearnerGaps(user ? user.id : currentUserId);
+      if (!user) {
+        return res.status(401).json({ success: false, message: 'Authentication required. Please log in.' });
+      }
+      const data = await recalibrateLearnerGaps(user.id);
       res.json({
         success: true,
         gaps: data.gaps,
@@ -970,13 +998,16 @@ export function createExpressApp() {
 
   app.get(['/api/recommendations/unified', '/recommendations/unified'], async (req, res) => {
     try {
-      const user = resolveUser(req) || db.state.users[currentUserId] || db.state.users['user-learner-01'];
-      const userId = user?.id || currentUserId;
+      const user = resolveUser(req);
+      if (!user) {
+        return res.status(401).json({ success: false, message: 'Authentication required. Please log in.' });
+      }
+      const userId = user.id;
       let gaps = db.state.gapAnalysis[userId] || [];
       if (gaps.length === 0) {
         gaps = recalculateGapsSynchronous(userId);
       }
-      const targetRole = user?.targetRole || user?.designation || 'Deputy Director (Statistics)';
+      const targetRole = user.targetRole || user.designation || 'Deputy Director (Statistics)';
       const unified: UnifiedRecommendation[] = [];
 
       for (const gap of gaps) {
@@ -996,9 +1027,12 @@ export function createExpressApp() {
   // ==========================================
   app.get(['/api/learning-path', '/learning-path'], (req, res) => {
     try {
-      const user = resolveUser(req) || db.state.users[currentUserId] || db.state.users['user-learner-01'];
-      const userId = user?.id || currentUserId;
-      const targetRole = user?.targetRole || user?.designation || 'Deputy Director (Statistics)';
+      const user = resolveUser(req);
+      if (!user) {
+        return res.status(401).json({ success: false, message: 'Authentication required. Please log in.' });
+      }
+      const userId = user.id;
+      const targetRole = user.targetRole || user.designation || 'Deputy Director (Statistics)';
       let path = db.state.learningPaths[userId];
 
       if (!path) {
@@ -1013,18 +1047,16 @@ export function createExpressApp() {
       res.json({ success: true, learningPath: path });
     } catch (err: any) {
       console.error('Failed to get learning path:', err);
-      const fallbackPath = UnifiedCatalogueService.generatePersonalizedPathway(
-        'user-learner-01',
-        'Senior Statistical Officer',
-        recalculateGapsSynchronous('user-learner-01')
-      );
-      res.json({ success: true, learningPath: fallbackPath });
+      res.status(500).json({ success: false, message: 'Failed to retrieve learning path' });
     }
   });
 
   app.post(['/api/learning-path/step-update', '/learning-path/step-update'], (req, res) => {
-    const user = resolveUser(req) || db.state.users[currentUserId];
-    const userId = user?.id || currentUserId;
+    const user = resolveUser(req);
+    if (!user) {
+      return res.status(401).json({ success: false, message: 'Authentication required. Please log in.' });
+    }
+    const userId = user.id;
     const { stepId, status, score } = req.body;
     const path = db.state.learningPaths[userId] || db.state.learningPaths['user-learner-01'];
     if (path) {
@@ -1094,7 +1126,10 @@ export function createExpressApp() {
   });
 
   app.post(['/api/assessments/submit', '/assessments/submit'], async (req, res) => {
-    const user = resolveUser(req) || db.state.users[currentUserId];
+    const user = resolveUser(req);
+    if (!user) {
+      return res.status(401).json({ success: false, message: 'Authentication required. Please log in.' });
+    }
     const userId = user.id;
     const { assessmentId, answers = [], timeSpentSeconds, questions: customQuestions, competency: customComp } = req.body;
     
@@ -1292,7 +1327,10 @@ export function createExpressApp() {
 
   // Competency Upgrade Audit Trail Endpoint
   app.get('/api/competency-upgrades/audit', (req, res) => {
-    const user = resolveUser(req) || db.state.users[currentUserId];
+    const user = resolveUser(req);
+    if (!user) {
+      return res.status(401).json({ success: false, message: 'Authentication required. Please log in.' });
+    }
     const audits = db.state.competencyUpgradeAudits[user.id] || [];
     res.json({ success: true, audits, totalCount: audits.length });
   });
@@ -1348,6 +1386,11 @@ Key Topics:
   });
 
   app.post('/api/documents/upload-and-generate', async (req, res) => {
+    const user = resolveUser(req);
+    if (!user) {
+      return res.status(401).json({ success: false, message: 'Authentication required. Please log in.' });
+    }
+
     const { fileName, fileContent, competency, difficulty, questionCount } = req.body;
 
     const docId = `doc-${Date.now()}`;
@@ -1364,7 +1407,7 @@ Key Topics:
       fileName: fileName || 'Uploaded_MoSPI_Guideline.pdf',
       fileSize: (fileContent?.length || 1024) * 2,
       fileType: 'application/pdf',
-      uploadedBy: currentUserId,
+      uploadedBy: user.id,
       uploadedAt: new Date().toISOString(),
       purpose: 'TRAINER_ASSESSMENT_GENERATION' as const,
       extractedTopics: ['Methodology', 'Sampling Frame', 'Validation Rules', 'Dissemination'],
@@ -1391,7 +1434,7 @@ Key Topics:
     db.state.auditLogs.unshift({
       id: `log-${Date.now()}`,
       timestamp: new Date().toISOString(),
-      user: db.state.users[currentUserId]?.name || 'Trainer',
+      user: user.name || 'Trainer',
       action: 'AI_ASSESSMENT_GENERATED',
       details: `Generated ${generatedQuestions.length} questions from ${fileName} for ${competency}.`,
     });
@@ -1406,6 +1449,11 @@ Key Topics:
 
   app.post('/api/documents/summarize-and-generate', async (req, res) => {
     try {
+      const user = resolveUser(req);
+      if (!user) {
+        return res.status(401).json({ success: false, message: 'Authentication required. Please log in.' });
+      }
+
       const { fileName, fileContent, competency, difficulty, questionCount } = req.body;
 
       if (!fileContent || !fileContent.trim()) {
@@ -1426,7 +1474,7 @@ Key Topics:
         fileName: result.fileName,
         fileSize: Math.max(1024, fileContent.length * 2),
         fileType: 'application/pdf',
-        uploadedBy: currentUserId,
+        uploadedBy: user.id,
         uploadedAt: new Date().toISOString(),
         purpose: 'TRAINER_ASSESSMENT_GENERATION' as const,
         extractedTopics: result.targetCompetencies,
@@ -1453,7 +1501,7 @@ Key Topics:
       db.state.auditLogs.unshift({
         id: `log-${Date.now()}`,
         timestamp: new Date().toISOString(),
-        user: db.state.users[currentUserId]?.name || 'Officer',
+        user: user.name || 'Officer',
         action: 'AI_DOCUMENT_ANALYZED',
         details: `Summarized ${result.fileName} and created ${result.generatedQuestions.length} assessment questions.`,
       });
@@ -1607,11 +1655,14 @@ Key Topics:
   // ==========================================
   const handleAssistantChat = async (req: Request, res: Response) => {
     try {
+      const user = resolveUser(req);
+      if (!user) {
+        return res.status(401).json({ success: false, message: 'Authentication required. Please log in.' });
+      }
       const { message, history } = req.body;
-      const user = resolveUser(req) || db.state.users[currentUserId] || db.state.users['user-learner-01'];
-      const userComps = db.state.learnerCompetencies[user.id] || db.state.learnerCompetencies['user-learner-01'] || [];
-      const gaps = db.state.gapAnalysis[user.id] || db.state.gapAnalysis['user-learner-01'] || [];
-      const learningPath = db.state.learningPaths[user.id] || db.state.learningPaths['user-learner-01'];
+      const userComps = db.state.learnerCompetencies[user.id] || [];
+      const gaps = db.state.gapAnalysis[user.id] || [];
+      const learningPath = db.state.learningPaths[user.id];
       const docs = db.state.uploadedDocuments || [];
 
       const response = await generateAIMentorResponse({
@@ -1697,6 +1748,13 @@ Key Topics:
   // 10. ADMINISTRATOR: WORKFORCE METRICS & FORECASTING
   // ==========================================
   app.get('/api/admin/metrics', (req, res) => {
+    const user = resolveUser(req);
+    if (!user) {
+      return res.status(401).json({ success: false, message: 'Unauthorized. Authentication token required.' });
+    }
+    if ((user.role as string) !== 'ADMINISTRATOR' && (user.role as string) !== 'ADMIN') {
+      return res.status(403).json({ success: false, message: 'Forbidden. Administrator authorization required.' });
+    }
     res.json({
       success: true,
       metrics: db.state.workforceMetrics,

@@ -1,197 +1,40 @@
 import React, { createContext, useContext, useState, useEffect, useCallback, useRef } from 'react';
 import { UserProfile, RoleType, LearnerCompetency, GapAnalysisResult, IGOTCourse, NSSTAProgram } from '../types';
 import { api, tokenStorage } from '../services/api';
-import { firebaseService } from '../services/firebase';
+import { supabaseService } from '../services/supabaseService';
+import { supabase } from '../lib/supabase';
 import { calculateNextPrioritySkill, PrioritySkillRecommendation } from '../utils/prioritySkill';
 
 // ==========================================
 // 1. Types & Database Schema
 // ==========================================
 
-export interface MockUserAccount extends UserProfile {
-  passwordHash: string;
-  passwordSalt: string;
-  createdAt: string;
-  lastLoginAt?: string;
-  status: 'ACTIVE' | 'SUSPENDED';
-  authProvider: 'CREDENTIALS' | 'PARICHAY_SSO';
-}
-
-export interface MockSessionRecord {
-  token: string;
-  userId: string;
-  email: string;
-  role: RoleType;
-  createdAt: string;
-  expiresAt: string;
-}
-
-export interface MockAuditLog {
-  id: string;
-  timestamp: string;
-  action: 'LOGIN' | 'REGISTER' | 'LOGOUT' | 'ROLE_SWITCH' | 'PROFILE_UPDATE' | 'PURPOSE_SET';
-  userId?: string;
-  email?: string;
-  status: 'SUCCESS' | 'FAILURE';
-  details?: string;
-}
-
-export interface MockDatabaseSchema {
-  version: number;
-  users: Record<string, MockUserAccount>;
-  sessions: Record<string, MockSessionRecord>;
-  competencies: Record<string, LearnerCompetency[]>;
-  gaps: Record<string, GapAnalysisResult[]>;
-  auditLogs: MockAuditLog[];
-}
-
-// ==========================================
-// 2. Cryptographic & Security Helpers
-// ==========================================
-
-// Synchronous and deterministic SHA-256 fallback hash for client-side sandbox reliability
-function simpleSha256(str: string): string {
-  let h0 = 0x6a09e667;
-  let h1 = 0xbb67ae85;
-  let h2 = 0x3c6ef372;
-  let h3 = 0xa54ff53a;
-  let h4 = 0x510e527f;
-  let h5 = 0x9b05688c;
-  let h6 = 0x1f83d9ab;
-  let h7 = 0x5be0cd19;
-
-  for (let i = 0; i < str.length; i++) {
-    const code = str.charCodeAt(i);
-    h0 = ((h0 << 5) - h0 + code + (code * 31)) | 0;
-    h1 = ((h1 << 5) - h1 + code + (code * 17)) | 0;
-    h2 = ((h2 << 5) - h2 + code + (code * 13)) | 0;
-    h3 = ((h3 << 5) - h3 + code + (code * 7)) | 0;
-    h4 = ((h4 << 5) - h4 + code + (code * 23)) | 0;
-    h5 = ((h5 << 5) - h5 + code + (code * 11)) | 0;
-    h6 = ((h6 << 5) - h6 + code + (code * 19)) | 0;
-    h7 = ((h7 << 5) - h7 + code + (code * 29)) | 0;
-  }
-
-  const toHex = (n: number) => (n >>> 0).toString(16).padStart(8, '0');
-  return `${toHex(h0)}${toHex(h1)}${toHex(h2)}${toHex(h3)}${toHex(h4)}${toHex(h5)}${toHex(h6)}${toHex(h7)}`;
-}
-
-function generateSalt(): string {
-  return Math.random().toString(36).substring(2, 15) + Math.random().toString(36).substring(2, 15);
-}
-
-function hashPassword(password: string, salt: string): string {
-  return simpleSha256(`${salt}:${password}:statvia_gov_secure_salt`);
-}
-
-function generateSessionToken(userId: string): string {
-  return `statvia_token_${userId}_${Date.now()}_${Math.random().toString(36).substring(2, 10)}`;
-}
-
-// ==========================================
-// 3. Seeded Initial Database
-// ==========================================
-
-const SEED_SALT = 'mospi_gov_salt_2026';
-
-const SEED_LEARNER: MockUserAccount = {
-  id: 'user-learner-01',
-  name: 'Aarav Sharma',
-  email: 'aarav.sharma@mospi.gov.in',
+const DEFAULT_OFFICER_BASELINE: UserProfile = {
+  id: '',
+  name: 'Official Officer',
+  email: '',
   role: 'LEARNER',
-  employeeId: 'ISS-2019-7482',
+  employeeId: '',
   ministry: 'Ministry of Statistics & Programme Implementation (MoSPI)',
-  department: 'Ministry of Statistics & Programme Implementation (MoSPI)',
-  division: 'Data Analytics & Survey Division',
+  department: 'National Statistical Office (NSO)',
   organization: 'Government of India',
-  designation: 'Assistant Director (Statistics)',
-  currentRole: 'Assistant Director (Statistics)',
-  targetRole: 'Deputy Director (Statistics)',
+  designation: 'Statistical Officer',
+  currentRole: 'Statistical Officer',
+  targetRole: 'Senior Statistical Officer / Lead Analyst',
   level: 11,
-  cadre: 'Indian Statistical Service (ISS)',
-  yearsOfExperience: 7,
+  cadre: 'Subordinate Statistical Service (SSS)',
+  yearsOfExperience: 5,
   education: 'M.Sc. Statistics',
-  specialization: 'Survey Data Analysis & Statistical Reporting',
+  specialization: 'Survey Data Analysis & Official Statistics',
   location: 'New Delhi',
   preferredLanguage: 'English / Hindi',
-  previousRoles: ['Senior Statistical Officer', 'Statistical Investigator'],
-  currentProjects: ['Survey Data Analysis & Statistical Reporting', 'PLFS Annual Statistical Review'],
-  technologiesUsed: ['Python', 'SQL', 'R', 'CSPro', 'Stata'],
-  trainingHours: 48,
-  roleReadiness: 82,
-  verifiedSkillsCount: 14,
-  developingSkillsCount: 3,
-  passwordSalt: SEED_SALT,
-  passwordHash: hashPassword('Learner@2026', SEED_SALT),
-  createdAt: '2025-01-01T00:00:00.000Z',
-  status: 'ACTIVE',
-  authProvider: 'CREDENTIALS',
-};
-
-const SEED_TRAINER: MockUserAccount = {
-  id: 'user-trainer-01',
-  name: 'Dr. Rajeshwar Rao',
-  email: 'rajesh.verma@mospi.gov.in',
-  role: 'TRAINER',
-  employeeId: 'ISS-2012-3910',
-  ministry: 'Ministry of Statistics and Programme Implementation (MoSPI)',
-  department: 'Training Division',
-  organization: 'National Statistical Systems Training Academy (NSSTA)',
-  designation: 'Director of Training & Academic Faculty',
-  currentRole: 'Senior Faculty (Official Statistics)',
-  targetRole: 'Dean of Faculty / Training Lead',
-  level: 13,
-  cadre: 'Indian Statistical Service (ISS)',
-  yearsOfExperience: 14,
-  education: 'Ph.D. Econometrics (ISI Kolkata)',
-  specialization: 'Survey Sampling & Modern Statistical Computing',
-  location: 'NSSTA Greater Noida, UP',
-  preferredLanguage: 'English / Hindi',
-  previousRoles: ['Joint Director (SDRD, Kolkata)', 'Deputy Director (FOD, Hyderabad)'],
-  currentProjects: ['All-India Cadre Induction Curriculum 2026', 'CAPI & Data Quality Automated Validation Engine'],
-  technologiesUsed: ['Python', 'R', 'CSPro', 'Stata', 'LaTeX'],
-  trainingHours: 120,
-  roleReadiness: 96,
-  verifiedSkillsCount: 22,
-  developingSkillsCount: 1,
-  passwordSalt: SEED_SALT,
-  passwordHash: hashPassword('Trainer@2026', SEED_SALT),
-  createdAt: '2025-01-01T00:00:00.000Z',
-  status: 'ACTIVE',
-  authProvider: 'CREDENTIALS',
-};
-
-const SEED_ADMIN: MockUserAccount = {
-  id: 'user-admin-01',
-  name: 'Vikram Sen',
-  email: 'vikram.sen@mospi.gov.in',
-  role: 'ADMINISTRATOR',
-  employeeId: 'ISS-2006-1102',
-  ministry: 'Ministry of Statistics and Programme Implementation (MoSPI)',
-  department: 'Capacity Building & Workforce Management Division',
-  organization: 'Central Statistics Office (CSO)',
-  designation: 'Joint Secretary & Chief Data Officer',
-  currentRole: 'Joint Secretary (Capacity Building)',
-  targetRole: 'Additional Secretary & Director General',
-  level: 14,
-  cadre: 'Indian Statistical Service (ISS)',
-  yearsOfExperience: 20,
-  education: 'M.Stat (ISI Delhi) & MPA (Harvard Kennedy School)',
-  specialization: 'Statistical Governance, DPDP Act & Big Data Architecture',
-  location: 'New Delhi, Headquarters',
-  preferredLanguage: 'English / Hindi',
-  previousRoles: ['Deputy Director General (National Accounts)', 'Director (Price Statistics Division)'],
-  currentProjects: ['National Statistical System Modernization Project (NSSMP)', 'Mission Karmayogi MoSPI Integration'],
-  technologiesUsed: ['Enterprise BI', 'Cloud Data Lake', 'Python', 'SQL'],
-  trainingHours: 180,
-  roleReadiness: 98,
-  verifiedSkillsCount: 28,
+  previousRoles: [],
+  currentProjects: [],
+  technologiesUsed: ['Python', 'SQL', 'R'],
+  trainingHours: 0,
+  roleReadiness: 75,
+  verifiedSkillsCount: 0,
   developingSkillsCount: 0,
-  passwordSalt: SEED_SALT,
-  passwordHash: hashPassword('Admin@2026', SEED_SALT),
-  createdAt: '2025-01-01T00:00:00.000Z',
-  status: 'ACTIVE',
-  authProvider: 'CREDENTIALS',
 };
 
 const DEFAULT_COMPETENCIES: LearnerCompetency[] = [
@@ -668,372 +511,8 @@ const DEFAULT_GAPS: GapAnalysisResult[] = [
   },
 ];
 
-const STORAGE_DB_KEY = 'nipun_statistical_database_v3';
-
-class MockDatabaseStore {
-  private state: MockDatabaseSchema;
-
-  constructor() {
-    this.state = this.loadFromStorage();
-  }
-
-  private loadFromStorage(): MockDatabaseSchema {
-    try {
-      if (typeof window !== 'undefined' && window.localStorage) {
-        const stored = window.localStorage.getItem(STORAGE_DB_KEY);
-        if (stored) {
-          const parsed = JSON.parse(stored);
-          if (parsed && parsed.version === 2 && parsed.users) {
-            return parsed;
-          }
-        }
-      }
-    } catch {
-      // Ignore
-    }
-
-    // Default Seed DB
-    const initial: MockDatabaseSchema = {
-      version: 2,
-      users: {
-        [SEED_LEARNER.id]: SEED_LEARNER,
-        [SEED_TRAINER.id]: SEED_TRAINER,
-        [SEED_ADMIN.id]: SEED_ADMIN,
-      },
-      sessions: {},
-      competencies: {
-        [SEED_LEARNER.id]: DEFAULT_COMPETENCIES,
-        [SEED_TRAINER.id]: DEFAULT_COMPETENCIES.map((c) => ({ ...c, currentLevel: 5, gap: 0, status: 'VERIFIED' })),
-        [SEED_ADMIN.id]: DEFAULT_COMPETENCIES.map((c) => ({ ...c, currentLevel: 5, gap: 0, status: 'VERIFIED' })),
-      },
-      gaps: {
-        [SEED_LEARNER.id]: DEFAULT_GAPS,
-        [SEED_TRAINER.id]: [],
-        [SEED_ADMIN.id]: [],
-      },
-      auditLogs: [
-        {
-          id: `audit-${Date.now()}-init`,
-          timestamp: new Date().toISOString(),
-          action: 'REGISTER',
-          userId: SEED_LEARNER.id,
-          email: SEED_LEARNER.email,
-          status: 'SUCCESS',
-          details: 'Official demo accounts initialized with salted password hashes.',
-        },
-      ],
-    };
-
-    this.saveToStorage(initial);
-    return initial;
-  }
-
-  public saveToStorage(state?: MockDatabaseSchema): void {
-    try {
-      if (typeof window !== 'undefined' && window.localStorage) {
-        window.localStorage.setItem(STORAGE_DB_KEY, JSON.stringify(state || this.state));
-      }
-    } catch {
-      // Ignore
-    }
-  }
-
-  public getState(): MockDatabaseSchema {
-    return this.state;
-  }
-
-  public getUserByEmail(email: string): MockUserAccount | null {
-    const normalized = email.trim().toLowerCase();
-    return Object.values(this.state.users).find((u) => u.email.toLowerCase() === normalized) || null;
-  }
-
-  public getUserByIdentifier(identifier: string): MockUserAccount | null {
-    const normalized = identifier.trim().toLowerCase();
-    return (
-      Object.values(this.state.users).find(
-        (u) =>
-          u.email.toLowerCase() === normalized ||
-          u.name.toLowerCase() === normalized ||
-          u.email.split('@')[0].toLowerCase() === normalized ||
-          u.id.toLowerCase() === normalized
-      ) || null
-    );
-  }
-
-  public getUserById(userId: string): MockUserAccount | null {
-    return this.state.users[userId] || null;
-  }
-
-  public verifyCredentials(identifier: string, passwordPlain: string): { success: boolean; user?: MockUserAccount; message?: string } {
-    let normalized = identifier.trim().toLowerCase();
-    
-    // Support aliases
-    if (normalized === 'rajesh.verma@mospi.gov.in') {
-      normalized = 'r.rao@nssta.gov.in';
-    } else if (normalized === 'vikram.sen@mospi.gov.in') {
-      normalized = 'sanjay.deshmukh@nic.in';
-    }
-
-    let user = this.getUserByIdentifier(normalized) || this.getUserByIdentifier(identifier);
-
-    // If OTP verification mode
-    if (passwordPlain === 'OTP-VERIFIED') {
-      if (!user) {
-        // Auto-provision an official officer account for seamless OTP login
-        const newUserId = `user-otp-${Date.now()}`;
-        const salt = generateSalt();
-        const passwordHash = hashPassword('OTP-VERIFIED', salt);
-        const namePart = identifier.includes('@') ? identifier.split('@')[0].replace(/[._-]/g, ' ') : identifier;
-        const formattedName = namePart
-          .split(' ')
-          .map((s) => s.charAt(0).toUpperCase() + s.slice(1))
-          .join(' ') || 'Statistical Officer';
-
-        user = {
-          id: newUserId,
-          name: formattedName,
-          email: identifier.includes('@') ? identifier.trim().toLowerCase() : `${normalized.replace(/\s+/g, '.')}@mospi.gov.in`,
-          role: 'LEARNER',
-          employeeId: `GOI-STAT-${Math.floor(1000 + Math.random() * 9000)}`,
-          ministry: 'Ministry of Statistics and Programme Implementation (MoSPI)',
-          department: 'National Accounts Division (NAD)',
-          organization: 'Central Statistics Office (CSO)',
-          designation: 'Senior Statistical Officer',
-          currentRole: 'Senior Statistical Officer',
-          targetRole: 'Assistant Director / Data Lead',
-          level: 10,
-          cadre: 'Subordinate Statistical Service (SSS)',
-          yearsOfExperience: 4,
-          education: 'M.Sc. Statistics / Economics',
-          specialization: 'Official Statistical System & Data Analytics',
-          location: 'New Delhi, Headquarters',
-          preferredLanguage: 'English / Hindi',
-          previousRoles: ['Junior Statistical Officer'],
-          currentProjects: ['Official Statistics Capacity Modernization'],
-          technologiesUsed: ['Python', 'Excel / VBA', 'SQL'],
-          trainingHours: 12,
-          roleReadiness: 75,
-          verifiedSkillsCount: 10,
-          developingSkillsCount: 3,
-          passwordSalt: salt,
-          passwordHash,
-          createdAt: new Date().toISOString(),
-          lastLoginAt: new Date().toISOString(),
-          status: 'ACTIVE',
-          authProvider: 'CREDENTIALS',
-        };
-        this.state.users[newUserId] = user;
-        this.state.competencies[newUserId] = DEFAULT_COMPETENCIES.map((c) => ({ ...c }));
-        this.state.gaps[newUserId] = DEFAULT_GAPS.map((g) => ({ ...g }));
-      }
-      user.lastLoginAt = new Date().toISOString();
-      this.state.users[user.id] = user;
-      this.logAudit('LOGIN', user.id, user.email, 'SUCCESS', 'OTP login authentication successful');
-      this.saveToStorage(this.state);
-      return { success: true, user };
-    }
-
-    if (!user) {
-      return { success: false, message: 'No registered officer account found with this email address or username. Please check your spelling or register an account.' };
-    }
-
-    if (user.status !== 'ACTIVE') {
-      return { success: false, message: 'Account has been temporarily deactivated by MoSPI Admin.' };
-    }
-
-    const calculatedHash = hashPassword(passwordPlain, user.passwordSalt);
-    // Allow verified hash match or direct seed password match
-    const isMatch =
-      calculatedHash === user.passwordHash ||
-      passwordPlain === 'Learner@2026' ||
-      passwordPlain === 'Trainer@2026' ||
-      passwordPlain === 'Admin@2026' ||
-      passwordPlain === 'password';
-
-    if (!isMatch) {
-      return { success: false, message: 'Invalid password entered. Please check your official credentials.' };
-    }
-
-    // Update last login
-    user.lastLoginAt = new Date().toISOString();
-    this.state.users[user.id] = user;
-    this.logAudit('LOGIN', user.id, user.email, 'SUCCESS', 'Password authentication successful');
-    this.saveToStorage(this.state);
-
-    return { success: true, user };
-  }
-
-  public registerUser(
-    userData: Partial<UserProfile> & { password?: string; email: string; name: string }
-  ): { success: boolean; user?: MockUserAccount; message?: string } {
-    const normalizedEmail = userData.email.trim().toLowerCase();
-
-    const existing = this.getUserByEmail(normalizedEmail) || this.getUserByIdentifier(userData.name);
-    if (existing) {
-      // Update password and profile if re-registering
-      const salt = generateSalt();
-      const passwordHash = hashPassword(userData.password || 'Learner@2026', salt);
-      existing.name = userData.name.trim();
-      existing.passwordSalt = salt;
-      existing.passwordHash = passwordHash;
-      if (userData.designation) existing.designation = userData.designation;
-      if (userData.cadre) existing.cadre = userData.cadre;
-      if (userData.ministry) existing.ministry = userData.ministry;
-      if (userData.role) existing.role = userData.role;
-      existing.lastLoginAt = new Date().toISOString();
-      this.state.users[existing.id] = existing;
-      this.saveToStorage(this.state);
-      return { success: true, user: existing };
-    }
-
-    if (!userData.password || userData.password.length < 6) {
-      return { success: false, message: 'Official password must be at least 6 characters in length.' };
-    }
-
-    const newUserId = `user-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
-    const salt = generateSalt();
-    const passwordHash = hashPassword(userData.password, salt);
-
-    const newUser: MockUserAccount = {
-      id: newUserId,
-      name: userData.name.trim(),
-      email: normalizedEmail,
-      role: userData.role || 'LEARNER',
-      employeeId: userData.employeeId || `GOI-STAT-${Math.floor(1000 + Math.random() * 9000)}`,
-      ministry: userData.ministry || 'Ministry of Statistics and Programme Implementation (MoSPI)',
-      department: userData.department || 'National Accounts Division (NAD)',
-      organization: userData.organization || 'Central Statistics Office (CSO)',
-      designation: userData.designation || 'Statistical Officer',
-      currentRole: userData.currentRole || userData.designation || 'Statistical Officer',
-      targetRole: userData.targetRole || 'Senior Statistical Officer / Data Lead',
-      level: userData.level || 10,
-      cadre: userData.cadre || 'Subordinate Statistical Service (SSS)',
-      yearsOfExperience: userData.yearsOfExperience || 4,
-      education: userData.education || 'M.Sc. Statistics / Economics',
-      specialization: userData.specialization || 'Official Statistical System & Data Analytics',
-      location: userData.location || 'New Delhi, Headquarters',
-      preferredLanguage: userData.preferredLanguage || 'English / Hindi',
-      previousRoles: userData.previousRoles || ['Junior Statistical Officer'],
-      currentProjects: userData.currentProjects || ['Official Statistics Capacity Modernization'],
-      technologiesUsed: userData.technologiesUsed || ['Python', 'Excel / VBA', 'SQL'],
-      trainingHours: 12,
-      roleReadiness: 70,
-      verifiedSkillsCount: 8,
-      developingSkillsCount: 4,
-      passwordSalt: salt,
-      passwordHash,
-      createdAt: new Date().toISOString(),
-      lastLoginAt: new Date().toISOString(),
-      status: 'ACTIVE',
-      authProvider: 'CREDENTIALS',
-    };
-
-    this.state.users[newUserId] = newUser;
-    this.state.competencies[newUserId] = DEFAULT_COMPETENCIES.map((c) => ({ ...c }));
-    this.state.gaps[newUserId] = DEFAULT_GAPS.map((g) => ({ ...g }));
-
-    this.logAudit('REGISTER', newUserId, normalizedEmail, 'SUCCESS', 'New officer registered and verified');
-    this.saveToStorage(this.state);
-
-    return { success: true, user: newUser };
-  }
-
-  public createSession(user: MockUserAccount): MockSessionRecord {
-    const token = generateSessionToken(user.id);
-    const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
-    const session: MockSessionRecord = {
-      token,
-      userId: user.id,
-      email: user.email,
-      role: user.role,
-      createdAt: new Date().toISOString(),
-      expiresAt,
-    };
-
-    this.state.sessions[token] = session;
-    this.saveToStorage(this.state);
-    return session;
-  }
-
-  public validateSession(token: string): MockUserAccount | null {
-    const session = this.state.sessions[token];
-    if (!session) return null;
-
-    if (new Date(session.expiresAt).getTime() < Date.now()) {
-      delete this.state.sessions[token];
-      this.saveToStorage(this.state);
-      return null;
-    }
-
-    return this.getUserById(session.userId);
-  }
-
-  public removeSession(token: string): void {
-    if (this.state.sessions[token]) {
-      const sess = this.state.sessions[token];
-      this.logAudit('LOGOUT', sess.userId, sess.email, 'SUCCESS', 'Session terminated');
-      delete this.state.sessions[token];
-      this.saveToStorage(this.state);
-    }
-  }
-
-  public getCompetencies(userId: string): LearnerCompetency[] {
-    return this.state.competencies[userId] || DEFAULT_COMPETENCIES;
-  }
-
-  public getGaps(userId: string): GapAnalysisResult[] {
-    return this.state.gaps[userId] || DEFAULT_GAPS;
-  }
-
-  public updateProfile(userId: string, updates: Partial<UserProfile>): MockUserAccount | null {
-    const user = this.getUserById(userId);
-    if (!user) return null;
-
-    const updated = { ...user, ...updates };
-    this.state.users[userId] = updated;
-    this.logAudit('PROFILE_UPDATE', userId, user.email, 'SUCCESS', 'User profile attributes updated');
-    this.saveToStorage(this.state);
-    return updated;
-  }
-
-  public resetToDefault(): void {
-    try {
-      if (typeof window !== 'undefined' && window.localStorage) {
-        window.localStorage.removeItem(STORAGE_DB_KEY);
-      }
-    } catch {
-      // Ignore
-    }
-    this.state = this.loadFromStorage();
-  }
-
-  private logAudit(
-    action: MockAuditLog['action'],
-    userId?: string,
-    email?: string,
-    status: 'SUCCESS' | 'FAILURE' = 'SUCCESS',
-    details?: string
-  ): void {
-    const log: MockAuditLog = {
-      id: `audit-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
-      timestamp: new Date().toISOString(),
-      action,
-      userId,
-      email,
-      status,
-      details,
-    };
-    this.state.auditLogs.unshift(log);
-    if (this.state.auditLogs.length > 100) {
-      this.state.auditLogs = this.state.auditLogs.slice(0, 100);
-    }
-  }
-}
-
-const mockDb = new MockDatabaseStore();
-
 // ==========================================
-// 4. AuthContext Interface
+// 2. AuthContext Interface
 // ==========================================
 
 export interface AuthContextType {
@@ -1238,25 +717,56 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     window.scrollTo({ top: 0, behavior: 'smooth' });
   }, [isLoading, isAuthReady, isAuthenticated, currentUser, openAuthModal, showNotification]);
 
-  // Sync state from active user
-  const syncUserData = useCallback((user: UserProfile) => {
-    setCurrentUser(user);
+  // Sync state from active authenticated user
+  const syncUserData = useCallback(async (user: UserProfile) => {
+    const normalizedName = user.name?.trim() || (user as any).displayName?.trim() || user.email?.split('@')[0] || 'Official Officer';
+    const normalizedUser: UserProfile = {
+      ...user,
+      name: normalizedName,
+    };
+    setCurrentUser(normalizedUser);
     setIsAuthenticated(true);
-    const userCompetencies = mockDb.getCompetencies(user.id);
-    const userGaps = mockDb.getGaps(user.id);
-    setCompetencies(userCompetencies);
-    setGaps(userGaps);
+
+    try {
+      const data = await api.getLearnerProfileCompetencies();
+      if (data && data.competencies && data.competencies.length > 0) {
+        setCompetencies(data.competencies);
+        setGaps(data.gaps || []);
+        return;
+      }
+    } catch {
+      // Backend offline or first-time officer
+    }
+
+    setCompetencies(DEFAULT_COMPETENCIES);
+    setGaps(DEFAULT_GAPS);
   }, []);
 
-  // Initialize and validate active session on startup
+  // Initialize and validate active session on startup using Supabase Auth
   const initSession = useCallback(async () => {
     setIsLoading(true);
     try {
-      // 0. Check if returning from Firebase Google Redirect Auth
+      // Purge any obsolete mock / statvia tokens
       try {
-        const redirectRes = await firebaseService.checkRedirectAuth();
+        if (typeof window !== 'undefined' && window.localStorage) {
+          window.localStorage.removeItem('statvia_auth_token');
+          window.localStorage.removeItem('nipun_statistical_database_v3');
+          for (let i = window.localStorage.length - 1; i >= 0; i--) {
+            const key = window.localStorage.key(i);
+            if (key && (key.startsWith('statvia_') || key.includes('statvia_token'))) {
+              window.localStorage.removeItem(key);
+            }
+          }
+        }
+      } catch {
+        // Ignore
+      }
+
+      // Check OAuth Redirect Auth
+      try {
+        const redirectRes = await supabaseService.checkRedirectAuth();
         if (redirectRes?.user) {
-          syncUserData(redirectRes.user);
+          await syncUserData(redirectRes.user);
           setIsAuthReady(true);
           setIsLoading(false);
           showNotification('Google Authentication Verified', `Signed in as ${redirectRes.user.name} (${redirectRes.user.email})`);
@@ -1266,53 +776,60 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         console.warn('[Google OAuth Init] Redirect check notice:', redirectErr);
       }
 
-      const existingToken = tokenStorage.get();
-      if (existingToken) {
-        // Try backend server first
-        try {
-          const res = await api.getCurrentUser();
-          if (res.success && res.user) {
-            syncUserData(res.user);
-            setIsAuthReady(true);
-            setIsLoading(false);
-            return;
-          }
-        } catch {
-          // Backend offline or in-memory sandbox, fallback to mock database store
-        }
-
-        // Validate token in local mock database
-        const sessionUser = mockDb.validateSession(existingToken);
-        if (sessionUser) {
-          syncUserData(sessionUser);
-          setIsAuthReady(true);
-          setIsLoading(false);
-          return;
-        }
+      // 1. Get real Supabase Auth session
+      const { data: { session }, error } = await supabase.auth.getSession();
+      if (error) {
+        console.warn('[AuthContext] Supabase getSession note:', error.message);
       }
 
-      // No active valid session -> remain strictly unauthenticated
-      setCurrentUser(null);
-      setIsAuthenticated(false);
+      if (session?.user) {
+        tokenStorage.set(session.access_token);
+        const mappedUser = supabaseService.mapSessionUserToProfile(session.user);
+        await syncUserData(mappedUser);
+      } else {
+        tokenStorage.clear();
+        setCurrentUser(null);
+        setIsAuthenticated(false);
+      }
     } catch (err) {
       console.error('Session initialization error:', err);
+      tokenStorage.clear();
       setCurrentUser(null);
       setIsAuthenticated(false);
     } finally {
       setIsAuthReady(true);
       setIsLoading(false);
     }
-  }, [syncUserData]);
+  }, [syncUserData, showNotification]);
 
   useEffect(() => {
     initSession();
-  }, [initSession]);
+
+    // 2. Subscribe to Supabase Auth state changes
+    const { data: authListener } = supabase.auth.onAuthStateChange(async (event, session) => {
+      if (event === 'SIGNED_IN' || event === 'USER_UPDATED' || event === 'TOKEN_REFRESHED') {
+        if (session?.user) {
+          tokenStorage.set(session.access_token);
+          const mappedUser = supabaseService.mapSessionUserToProfile(session.user);
+          await syncUserData(mappedUser);
+        }
+      } else if (event === 'SIGNED_OUT') {
+        tokenStorage.clear();
+        setCurrentUser(null);
+        setIsAuthenticated(false);
+      }
+    });
+
+    return () => {
+      authListener.subscription.unsubscribe();
+    };
+  }, [initSession, syncUserData]);
 
   // Protected Modal Handlers
   const handleSetDemoSelectorOpen = useCallback((open: boolean) => {
     if (open && (!isAuthenticated || !currentUser)) {
       openAuthModal('signin');
-      showNotification('Official Sign-In Required', 'Please sign in to select an official cadre persona.', 'warning');
+      showNotification('Official Sign-In Required', 'Please sign in with your official account.', 'warning');
       return;
     }
     setIsDemoSelectorOpen(open);
@@ -1421,84 +938,81 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     setActiveNsstaProgram(null);
   }, []);
 
-  // Real Email & Password Login
+  // Real Email & Password Login using Supabase Auth ONLY
   const login = async (credentials: { email: string; password?: string }): Promise<boolean> => {
     try {
       setIsLoading(true);
       setAuthError(null);
 
-      if (!credentials.email || !credentials.password) {
+      const email = credentials.email?.trim().toLowerCase();
+      const password = credentials.password || '';
+
+      if (!email || !password) {
         const msg = 'Official email and password are required.';
         setAuthError(msg);
         showNotification('Login Failed', msg, 'warning');
         return false;
       }
 
-      // 1. Try Backend API first
-      try {
-        const apiRes = await api.login(credentials);
-        if (apiRes.success && apiRes.user) {
-          // Keep mock database synced
-          if (!mockDb.getUserByEmail(credentials.email)) {
-            mockDb.registerUser({
-              ...apiRes.user,
-              email: credentials.email,
-              name: apiRes.user.name,
-              password: credentials.password,
-            });
-          }
-          syncUserData(apiRes.user);
-          setIsAuthModalOpen(false);
-          showNotification('Authenticated', apiRes.message || `Welcome back, ${apiRes.user.name}`);
-          const targetTab = pendingTabRef.current || 'dashboard';
-          pendingTabRef.current = null;
-          launchWorkspace(targetTab);
-          return true;
-        }
-      } catch {
-        // Fall through to Mock Database Store
-      }
+      // Direct Supabase Auth sign-in
+      const { data, error } = await supabase.auth.signInWithPassword({
+        email,
+        password,
+      });
 
-      // 2. Validate in Mock Database Store
-      const result = mockDb.verifyCredentials(credentials.email, credentials.password);
-      if (!result.success || !result.user) {
-        const errMsg = result.message || 'No registered officer account found with this email address. Please register an account.';
+      if (error || !data.user || !data.session) {
+        const errMsg = error?.message || 'Invalid credentials. Please check your official MoSPI email and password.';
         setAuthError(errMsg);
         showNotification('Authentication Failed', errMsg, 'warning');
         return false;
       }
 
-      // If user verified locally, also sync to backend asynchronously
+      tokenStorage.set(data.session.access_token);
+      const user = supabaseService.mapSessionUserToProfile(data.user);
+
+      // Ensure public.users and official_profiles record exists
       try {
-        api.register({
-          ...result.user,
-          password: credentials.password,
-        }).catch(() => {});
-      } catch {
-        // Ignore backend sync error
+        await supabase.from('users').upsert({
+          id: data.user.id,
+          email: data.user.email,
+          name: user.name,
+          role: user.role,
+          status: 'ACTIVE',
+          auth_provider: 'SUPABASE_AUTH',
+          updated_at: new Date().toISOString(),
+        });
+        await supabase.from('official_profiles').upsert({
+          user_id: data.user.id,
+          employee_id: user.employeeId,
+          cadre: user.cadre,
+          pay_level: user.level,
+          years_of_experience: user.yearsOfExperience,
+          preferred_language: user.preferredLanguage,
+          updated_at: new Date().toISOString(),
+        });
+      } catch (syncErr) {
+        console.warn('[SupabaseAuth] Non-blocking public.users sync notice:', syncErr);
       }
 
-      const session = mockDb.createSession(result.user);
-      tokenStorage.set(session.token);
-      syncUserData(result.user);
+      await syncUserData(user);
       setIsAuthModalOpen(false);
-      showNotification('Official Sign-In Verified', `Welcome back, ${result.user.name} (${result.user.designation})`);
+      showNotification('Official Sign-In Verified', `Welcome back, ${user.name} (${user.designation})`);
 
       const targetTab = pendingTabRef.current || 'dashboard';
       pendingTabRef.current = null;
       launchWorkspace(targetTab);
       return true;
     } catch (err: any) {
-      const errMsg = err.message || 'Authentication service error. Please try again.';
+      const errMsg = err?.message || 'Authentication failed. Please check your official credentials.';
       setAuthError(errMsg);
-      showNotification('Error', errMsg, 'warning');
+      showNotification('Authentication Failed', errMsg, 'warning');
       return false;
     } finally {
       setIsLoading(false);
     }
   };
 
-  // Real Officer Registration
+  // Real Officer Registration using Supabase Auth ONLY
   const register = async (userData: Partial<UserProfile> & { password?: string }): Promise<boolean> => {
     try {
       setIsLoading(true);
@@ -1530,147 +1044,120 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         return false;
       }
 
-      // 1. ALWAYS persist to Mock Database Store & check for duplicates
-      const mockResult = mockDb.registerUser({
-        ...userData,
+      const role = userData.role || 'LEARNER';
+      const designation = userData.designation || 'Statistical Officer';
+      const cadre = userData.cadre || 'Subordinate Statistical Service (SSS)';
+      const ministry = userData.ministry || 'Ministry of Statistics & Programme Implementation (MoSPI)';
+      const department = userData.department || 'National Statistical Office (NSO)';
+      const employeeId = userData.employeeId || `MOSPI-${Math.floor(1000 + Math.random() * 9000)}`;
+
+      // Register directly via Supabase Auth
+      const { data, error } = await supabase.auth.signUp({
         email: trimmedEmail,
-        name: trimmedName,
-        password: password,
+        password,
+        options: {
+          data: {
+            name: trimmedName,
+            full_name: trimmedName,
+            role,
+            designation,
+            cadre,
+            ministry,
+            department,
+            employeeId,
+          },
+        },
       });
 
-      let registeredUser: UserProfile | null = mockResult.user || null;
+      if (error) {
+        throw new Error(error.message || 'Registration failed');
+      }
 
-      // 2. Persist to Backend API (Express server DB)
+      const authUser = data.user;
+      if (!authUser) {
+        throw new Error('User record was not created in Supabase Auth');
+      }
+
+      // Link/create the corresponding public.users record
       try {
-        const apiRes = await api.register({
-          ...userData,
-          name: trimmedName,
+        await supabase.from('users').upsert({
+          id: authUser.id,
           email: trimmedEmail,
-          password: password,
-        });
-        if (apiRes.success && apiRes.user) {
-          registeredUser = apiRes.user;
-        }
-      } catch (apiErr) {
-        console.warn('[AuthContext] Backend API registration notice:', apiErr);
-      }
-
-      // 3. Persist to Firestore via firebaseService (non-blocking with 4s timeout)
-      try {
-        const fbPromise = firebaseService.registerWithEmail({
-          ...userData,
           name: trimmedName,
-          email: trimmedEmail,
-          password: password,
+          role,
+          status: 'ACTIVE',
+          auth_provider: 'SUPABASE_AUTH',
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
         });
-        const timeoutPromise = new Promise<null>((resolve) => setTimeout(() => resolve(null), 4000));
-        const fbRes: any = await Promise.race([fbPromise, timeoutPromise]);
-        if (fbRes?.user) {
-          registeredUser = fbRes.user;
-        }
-      } catch (fbErr: any) {
-        console.warn('[AuthContext] Firebase registration background sync note:', fbErr);
+        await supabase.from('official_profiles').upsert({
+          user_id: authUser.id,
+          employee_id: employeeId,
+          cadre,
+          pay_level: userData.level || 11,
+          years_of_experience: userData.yearsOfExperience || 5,
+          preferred_language: 'English / Hindi',
+          updated_at: new Date().toISOString(),
+        });
+      } catch (dbErr: any) {
+        console.warn('[SupabaseAuth] public.users sync notice:', dbErr?.message || dbErr);
       }
 
-      if (!registeredUser) {
-        const errMsg = mockResult.message || 'Unable to register account. Please check your details and try again.';
-        setAuthError(errMsg);
-        showNotification('Registration Failed', errMsg, 'warning');
-        return false;
+      const user = supabaseService.mapSessionUserToProfile(authUser);
+
+      if (data.session?.access_token) {
+        tokenStorage.set(data.session.access_token);
+        await syncUserData(user);
+        setIsAuthModalOpen(false);
+        showNotification(
+          'Registration Complete',
+          `Welcome to NIPUN, ${user.name}. Your account credentials and official profile have been saved.`
+        );
+        const targetTab = pendingTabRef.current || 'dashboard';
+        pendingTabRef.current = null;
+        launchWorkspace(targetTab);
+      } else {
+        setIsAuthModalOpen(false);
+        showNotification(
+          'Registration Submitted',
+          `Officer account created for ${user.email}. Please sign in with your password.`,
+          'info'
+        );
       }
-
-      const session = mockDb.createSession(registeredUser as any);
-      tokenStorage.set(session.token);
-      syncUserData(registeredUser);
-      setIsAuthModalOpen(false);
-      showNotification(
-        'Registration Complete',
-        `Welcome to NIPUN, ${registeredUser.name}. Your account credentials and official profile have been saved.`
-      );
-
-      const targetTab = pendingTabRef.current || 'dashboard';
-      pendingTabRef.current = null;
-      launchWorkspace(targetTab);
       return true;
     } catch (err: any) {
       console.error('Registration processing error:', err);
       const errMsg = err?.message || 'Registration service error. Please try again.';
       setAuthError(errMsg);
-      showNotification('Error', errMsg, 'warning');
+      showNotification('Registration Failed', errMsg, 'warning');
       return false;
     } finally {
       setIsLoading(false);
     }
   };
 
-  // Firebase Google Sign-In Authentication
+  // Supabase Google Sign-In Authentication (OAuth Flow)
   const loginWithGoogle = async (): Promise<boolean> => {
     try {
       setIsLoading(true);
       setAuthError(null);
 
-      const { user } = await firebaseService.signInWithGoogle();
+      const { user } = await supabaseService.signInWithGoogle();
       if (user) {
-        // 1. Sync user into mockDb database store
-        const existingLocal = mockDb.getUserByEmail(user.email);
-        let userAccount: MockUserAccount;
-
-        if (existingLocal) {
-          const dbState = mockDb.getState();
-          userAccount = {
-            ...existingLocal,
-            name: user.name || existingLocal.name,
-            lastLoginAt: new Date().toISOString(),
-          };
-          dbState.users[userAccount.id] = userAccount;
-          mockDb.saveToStorage();
-        } else {
-          const dbState = mockDb.getState();
-          userAccount = {
-            ...user,
-            passwordSalt: 'google_oauth_salt',
-            passwordHash: 'GOOGLE_OAUTH_TOKEN',
-            createdAt: new Date().toISOString(),
-            lastLoginAt: new Date().toISOString(),
-            status: 'ACTIVE',
-            authProvider: 'CREDENTIALS',
-          };
-          dbState.users[userAccount.id] = userAccount;
-          dbState.competencies[userAccount.id] = DEFAULT_COMPETENCIES.map((c) => ({ ...c }));
-          dbState.gaps[userAccount.id] = DEFAULT_GAPS.map((g) => ({ ...g }));
-          mockDb.saveToStorage();
-        }
-
-        // 2. Sync to Backend API
-        try {
-          await api.register({
-            ...userAccount,
-            password: 'GoogleOAuthUser@2026',
-          });
-        } catch {
-          // Ignore
-        }
-
-        const session = mockDb.createSession(userAccount);
-        tokenStorage.set(session.token);
-        syncUserData(userAccount);
+        await syncUserData(user);
         setIsAuthModalOpen(false);
-        showNotification(
-          'Google Authentication Verified',
-          `Successfully signed in as ${user.name} (${user.email})`
-        );
-
+        showNotification('Google Authentication Successful', `Welcome to NIPUN, ${user.name}.`, 'success');
         const targetTab = pendingTabRef.current || 'dashboard';
         pendingTabRef.current = null;
         launchWorkspace(targetTab);
         return true;
       }
-      return false;
+      return true;
     } catch (err: any) {
-      console.error('Google Sign-in processing error:', err);
-      const errMsg = err?.message || 'Google Sign-in was interrupted. Please try again or use official email login.';
+      console.error('Google login error:', err);
+      const errMsg = err?.message || 'Google authentication failed. Please try again.';
       setAuthError(errMsg);
-      showNotification('Google Sign-In Notice', errMsg, 'info');
+      showNotification('Authentication Notice', errMsg, 'warning');
       return false;
     } finally {
       setIsLoading(false);
@@ -1678,57 +1165,24 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   };
 
   // Parichay SSO Authentication
-  const loginWithParichay = async (role: 'LEARNER' | 'TRAINER' | 'ADMINISTRATOR' = 'LEARNER'): Promise<boolean> => {
-    try {
-      setIsLoading(true);
-      setAuthError(null);
-
-      // Find appropriate persona from database
-      const persona = Object.values(mockDb.getUserByEmail('') || {}).find(Boolean);
-      let targetUser: MockUserAccount | null = null;
-
-      if (role === 'TRAINER') {
-        targetUser = mockDb.getUserById(SEED_TRAINER.id) || SEED_TRAINER;
-      } else if (role === 'ADMINISTRATOR') {
-        targetUser = mockDb.getUserById(SEED_ADMIN.id) || SEED_ADMIN;
-      } else {
-        targetUser = mockDb.getUserById(SEED_LEARNER.id) || SEED_LEARNER;
-      }
-
-      if (targetUser) {
-        const session = mockDb.createSession(targetUser);
-        tokenStorage.set(session.token);
-        syncUserData(targetUser);
-        setIsAuthModalOpen(false);
-        showNotification('Parichay SSO Verified', `Single Sign-On confirmed as ${targetUser.name} (${targetUser.designation})`);
-        launchWorkspace('dashboard');
-        return true;
-      }
-      return false;
-    } catch (err) {
-      showNotification('SSO Error', 'Failed to connect to Parichay SSO gateway', 'warning');
-      return false;
-    } finally {
-      setIsLoading(false);
-    }
+  const loginWithParichay = async (_role: 'LEARNER' | 'TRAINER' | 'ADMINISTRATOR' = 'LEARNER'): Promise<boolean> => {
+    showNotification(
+      'Jan-Parichay SSO Gateway',
+      'Jan-Parichay Single Sign-On gateway integration requires production NIC federation. Please sign in with your official MoSPI credentials.',
+      'info'
+    );
+    return false;
   };
 
   // Logout & Session Revocation
   const logout = async () => {
     try {
       setIsLoading(true);
-      const token = tokenStorage.get();
-      if (token) {
-        mockDb.removeSession(token);
-        tokenStorage.clear();
-      }
-      try {
-        await api.logout();
-      } catch {
-        // Ignore network errors on logout
-      }
-
+      await supabase.auth.signOut();
+      tokenStorage.clear();
+      setCurrentUser(null);
       setIsAuthenticated(false);
+
       // Close all active modals & drawers
       setIsAuthModalOpen(false);
       setIsDemoSelectorOpen(false);
@@ -1749,25 +1203,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   };
 
   // Switch User Profile / Role
-  const switchUserRole = async (userId: string) => {
-    try {
-      setIsLoading(true);
-      let user = mockDb.getUserById(userId);
-      if (!user) {
-        if (userId === 'user-trainer-01') user = SEED_TRAINER;
-        else if (userId === 'user-admin-01') user = SEED_ADMIN;
-        else user = SEED_LEARNER;
-      }
-
-      const session = mockDb.createSession(user);
-      tokenStorage.set(session.token);
-      syncUserData(user);
-      setIsDemoSelectorOpen(false);
-      showNotification('Officer Profile Switched', `Active workspace: ${user.name} (${user.role})`);
-    } catch (err) {
-      console.error('Role switch error:', err);
-    } finally {
-      setIsLoading(false);
+  const switchUserRole = async (_target: string) => {
+    if (currentUser) {
+      showNotification('Role Information', `Active cadre role is '${currentUser.role}'. Role permissions are managed via Supabase Auth.`, 'info');
+    } else {
+      openAuthModal('signin');
     }
   };
 
@@ -1776,20 +1216,28 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     if (!currentUser) return false;
     setIsLoading(true);
     try {
-      const updated = mockDb.updateProfile(currentUser.id, updates);
-      if (updated) {
-        setCurrentUser(updated);
-        try {
-          await api.updateProfile(updates);
-        } catch {
-          // Ignore
+      const updated: UserProfile = { ...currentUser, ...updates };
+      setCurrentUser(updated);
+
+      try {
+        await api.updateProfile(updates);
+      } catch {
+        // Direct Supabase update fallback
+        if (currentUser.id) {
+          await supabase.from('users').update({ name: updates.name, role: updates.role }).eq('id', currentUser.id);
+          await supabase.from('official_profiles').update({
+            employee_id: updates.employeeId,
+            cadre: updates.cadre,
+            pay_level: updates.level,
+            years_of_experience: updates.yearsOfExperience,
+          }).eq('user_id', currentUser.id);
         }
-        showNotification('Profile Updated', 'Your target role and preferences have been updated.', 'success');
-        return true;
       }
-      return false;
+
+      showNotification('Profile Updated', 'Your target role and preferences have been updated.', 'success');
+      return true;
     } catch (err: any) {
-      showNotification('Update Failed', err.message || 'Failed to update profile', 'warning');
+      showNotification('Update Failed', err?.message || 'Failed to update profile', 'warning');
       return false;
     } finally {
       setIsLoading(false);
@@ -1806,59 +1254,44 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     if (!currentUser) return false;
     setIsLoading(true);
     try {
-      const updated = mockDb.updateProfile(currentUser.id, { targetRole: data.targetRole });
-      if (updated) {
-        setCurrentUser(updated);
-      }
+      const updated: UserProfile = { ...currentUser, targetRole: data.targetRole, specialization: data.title };
+      setCurrentUser(updated);
+
       try {
         await api.applyPurpose(data);
       } catch {
-        // Fallback local notification
+        // Local fallback
       }
       showNotification('Career Objective Configured', `Target set to "${data.title}"`, 'success');
       return true;
     } catch (err: any) {
-      showNotification('Error', err.message || 'Failed to configure objective', 'warning');
+      showNotification('Error', err?.message || 'Failed to configure objective', 'warning');
       return false;
     } finally {
       setIsLoading(false);
     }
   };
 
-  // Reset Demo Database
+  // Reset Demo Database (Disabled in pure Supabase mode)
   const resetDemoData = async () => {
-    try {
-      setIsLoading(true);
-      mockDb.resetToDefault();
-      tokenStorage.clear();
-      const defaultUser = mockDb.getUserById(SEED_LEARNER.id) || SEED_LEARNER;
-      const session = mockDb.createSession(defaultUser);
-      tokenStorage.set(session.token);
-      syncUserData(defaultUser);
-      try {
-        await api.resetDemo();
-      } catch {
-        // Ignore
-      }
-      showNotification('Database Reset', 'Official accounts, competencies, and learning paths reset to initial verified baseline.');
-    } catch (err) {
-      console.error('Reset error:', err);
-    } finally {
-      setIsLoading(false);
-    }
+    showNotification('System Baseline', 'Official system is powered solely by Supabase Auth. Demo accounts have been deprecated.', 'info');
   };
 
   const refreshUserData = async () => {
     if (currentUser) {
-      syncUserData(currentUser);
+      await syncUserData(currentUser);
     }
   };
 
   const exportPassportReport = () => {
+    if (!currentUser) {
+      showNotification('Sign-In Required', 'Please sign in to export your Competency Passport.', 'warning');
+      return;
+    }
     const reportData = {
       title: 'NIPUN Official Competency Passport Audit',
       generatedAt: new Date().toISOString(),
-      officer: currentUser || SEED_LEARNER,
+      officer: currentUser,
       competencies,
       gaps,
       verificationAuthority: 'National Statistical Systems Training Academy (NSSTA) & MoSPI',
@@ -1867,7 +1300,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `NIPUN_Competency_Passport_${currentUser?.name?.replace(/\s+/g, '_') || 'Officer'}.json`;
+    a.download = `NIPUN_Competency_Passport_${currentUser.name.replace(/\s+/g, '_') || 'Officer'}.json`;
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
@@ -1879,7 +1312,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     <AuthContext.Provider
       value={{
         currentUser,
-        activeLearner: currentUser || SEED_LEARNER,
+        activeLearner: currentUser || ({ ...DEFAULT_OFFICER_BASELINE, id: '' } as UserProfile),
         competencies,
         gaps,
         currentRole: currentUser?.role || 'LEARNER',

@@ -250,7 +250,7 @@ export const ReassessmentModal: React.FC = () => {
   const handleCopyCertificate = () => {
     if (resultData?.certificateId) {
       navigator.clipboard.writeText(
-        `MoSPI Capacity Building Certificate ID: ${resultData.certificateId}\nOfficer: ${currentUser?.name || 'Aarav Sharma'}\nScore: ${resultData.postLearningScore}%\nVerification: Verified & Synced with SPARROW.`
+        `MoSPI Capacity Building Certificate ID: ${resultData.certificateId}\nOfficer: ${currentUser?.name || 'MoSPI Officer'}\nScore: ${resultData.postLearningScore}%\nVerification: Verified & Synced with SPARROW.`
       );
       setCopiedCert(true);
       setTimeout(() => setCopiedCert(false), 2500);
@@ -597,7 +597,7 @@ export const ReassessmentModal: React.FC = () => {
                         </span>
                       </div>
                       <p className="text-[11px] text-white/80">
-                        Issued to <strong>{currentUser?.name || 'Aarav Sharma'}</strong> • MoSPI Official Capacity Building Certificate
+                        Issued to <strong>{currentUser?.name || 'MoSPI Officer'}</strong> • MoSPI Official Capacity Building Certificate
                       </p>
                     </div>
 

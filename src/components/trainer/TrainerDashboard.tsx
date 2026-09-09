@@ -1,6 +1,7 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { useAuth } from '../../context/AuthContext';
 import { api } from '../../services/api';
+import { useRealtimeSubscription } from '../../hooks/useRealtimeSubscription';
 import { UploadedDocument, QuizQuestion, QuizAssessment } from '../../types';
 import {
   Sparkles,
@@ -38,19 +39,41 @@ export const TrainerDashboard: React.FC = () => {
   const [generatedAssessment, setGeneratedAssessment] = useState<QuizAssessment | null>(null);
   const [editableQuestions, setEditableQuestions] = useState<QuizQuestion[]>([]);
 
-  useEffect(() => {
-    const fetchDocs = async () => {
-      try {
-        const res = await api.getDocuments();
-        if (res.success && res.documents) {
-          setDocuments(res.documents);
-        }
-      } catch (err) {
-        console.error('Failed to load documents:', err);
+  const fetchDocs = useCallback(async () => {
+    try {
+      const res = await api.getDocuments();
+      if (res.success && res.documents) {
+        setDocuments(res.documents);
       }
-    };
-    fetchDocs();
+    } catch (err) {
+      console.error('Failed to load documents:', err);
+    }
   }, []);
+
+  useEffect(() => {
+    fetchDocs();
+  }, [fetchDocs]);
+
+  // Realtime Subscriptions for Trainer Dashboard
+  useRealtimeSubscription({
+    table: 'uploaded_learning_materials',
+    onPayload: useCallback(() => {
+      fetchDocs();
+    }, [fetchDocs]),
+  });
+
+  useRealtimeSubscription({
+    table: 'assessment_attempts',
+    onPayload: useCallback((payload) => {
+      if (payload.eventType === 'INSERT') {
+        showNotification(
+          'Realtime Assessment Event',
+          'A learner completed a diagnostic assessment attempt. Cohort analytics updated.',
+          'info'
+        );
+      }
+    }, [showNotification]),
+  });
 
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];

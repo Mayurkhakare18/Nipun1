@@ -17,7 +17,7 @@ import {
 import { CLIENT_UNIFIED_CATALOGUE, CLIENT_RECOMMENDATIONS } from './catalogueData';
 import { CLIENT_ASSESSMENTS } from './assessmentData';
 
-const AUTH_TOKEN_STORAGE_KEY = 'statvia_auth_token';
+const AUTH_TOKEN_STORAGE_KEY = 'sb_access_token';
 
 let memoryToken: string | null = null;
 
@@ -26,6 +26,16 @@ export const tokenStorage = {
     if (memoryToken) return memoryToken;
     try {
       if (typeof window !== 'undefined' && window.localStorage) {
+        // Purge legacy statvia tokens if present
+        if (window.localStorage.getItem('statvia_auth_token')) {
+          window.localStorage.removeItem('statvia_auth_token');
+        }
+        for (let i = window.localStorage.length - 1; i >= 0; i--) {
+          const key = window.localStorage.key(i);
+          if (key && (key.startsWith('statvia_') || key.includes('statvia_token'))) {
+            window.localStorage.removeItem(key);
+          }
+        }
         return window.localStorage.getItem(AUTH_TOKEN_STORAGE_KEY);
       }
     } catch {
@@ -48,12 +58,41 @@ export const tokenStorage = {
     try {
       if (typeof window !== 'undefined' && window.localStorage) {
         window.localStorage.removeItem(AUTH_TOKEN_STORAGE_KEY);
+        window.localStorage.removeItem('statvia_auth_token');
+        for (let i = window.localStorage.length - 1; i >= 0; i--) {
+          const key = window.localStorage.key(i);
+          if (key && (key.startsWith('statvia_') || key.includes('statvia_token'))) {
+            window.localStorage.removeItem(key);
+          }
+        }
       }
     } catch {
       // Ignore
     }
   },
 };
+
+const PRODUCTION_VERCEL_API = (((import.meta as any).env?.VITE_API_BASE_URL) || 'https://nipun-test.vercel.app').replace(/\/$/, '');
+
+function resolveApiUrl(url: string): string {
+  if (url.startsWith('http://') || url.startsWith('https://')) {
+    return url;
+  }
+  const cleanPath = url.startsWith('/') ? url : `/${url}`;
+
+  if (typeof window !== 'undefined') {
+    const hostname = window.location.hostname;
+    const isLocal = hostname === 'localhost' || hostname === '127.0.0.1';
+    const isVercel = hostname.endsWith('.vercel.app');
+
+    // If on Firebase Hosting or external domain, direct /api calls to Vercel production API
+    if (!isLocal && !isVercel) {
+      return `${PRODUCTION_VERCEL_API}${cleanPath}`;
+    }
+  }
+
+  return cleanPath;
+}
 
 async function fetchWithAuth(url: string, options: RequestInit = {}, retries = 2): Promise<Response> {
   const token = tokenStorage.get();
@@ -67,11 +106,13 @@ async function fetchWithAuth(url: string, options: RequestInit = {}, retries = 2
     headers.set('Authorization', `Bearer ${token}`);
   }
 
+  const targetUrl = resolveApiUrl(url);
+
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), 8000);
 
   try {
-    const res = await fetch(url, {
+    const res = await fetch(targetUrl, {
       ...options,
       headers,
       signal: options.signal || controller.signal,

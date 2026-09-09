@@ -42,8 +42,8 @@ export const AuthModal: React.FC = () => {
   const [rememberMe, setRememberMe] = useState(true);
 
   // Password Login state
-  const [loginEmail, setLoginEmail] = useState('ananya.sharma@mospi.gov.in');
-  const [loginPassword, setLoginPassword] = useState('Learner@2026');
+  const [loginEmail, setLoginEmail] = useState('');
+  const [loginPassword, setLoginPassword] = useState('');
 
   // Forgot password modal state
   const [showForgotPassword, setShowForgotPassword] = useState(false);
@@ -243,48 +243,6 @@ export const AuthModal: React.FC = () => {
                   </div>
                 )}
 
-                {/* Seeded Credentials Helper Bar */}
-                <div className="p-2.5 bg-slate-50 border border-slate-200 rounded-xl space-y-1.5 text-[11px] text-slate-600">
-                  <div className="flex items-center justify-between font-bold text-slate-800">
-                    <span>Quick Test Accounts:</span>
-                    <span className="text-[10px] text-amber-700 font-mono">Database Verified</span>
-                  </div>
-                  <div className="flex flex-wrap gap-1.5">
-                    <button
-                      type="button"
-                      onClick={() => {
-                        clearAuthError();
-                        setLoginEmail('ananya.sharma@mospi.gov.in');
-                        setLoginPassword('Learner@2026');
-                      }}
-                      className="px-2 py-1 bg-white border border-slate-200 rounded-lg hover:border-amber-600 hover:bg-amber-50/50 text-[10px] text-slate-700 cursor-pointer font-medium"
-                    >
-                      Learner (Ananya)
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        clearAuthError();
-                        setLoginEmail('rajesh.verma@mospi.gov.in');
-                        setLoginPassword('Trainer@2026');
-                      }}
-                      className="px-2 py-1 bg-white border border-slate-200 rounded-lg hover:border-amber-600 hover:bg-amber-50/50 text-[10px] text-slate-700 cursor-pointer font-medium"
-                    >
-                      Trainer (Rajesh)
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        clearAuthError();
-                        setLoginEmail('vikram.sen@mospi.gov.in');
-                        setLoginPassword('Admin@2026');
-                      }}
-                      className="px-2 py-1 bg-white border border-slate-200 rounded-lg hover:border-amber-600 hover:bg-amber-50/50 text-[10px] text-slate-700 cursor-pointer font-medium"
-                    >
-                      Admin (Vikram)
-                    </button>
-                  </div>
-                </div>
 
                 {/* Remember Me */}
                 <div className="flex items-center justify-between text-xs text-slate-600 pt-0.5">
@@ -360,42 +318,6 @@ export const AuthModal: React.FC = () => {
                   <span>Sign in with Google</span>
                 </button>
 
-                <div className="flex items-center justify-between pt-1">
-                  <span className="text-[10px] uppercase font-bold text-slate-500 tracking-wider">
-                    Official Single Sign-On (Jan-Parichay):
-                  </span>
-                  <span className="text-[10px] text-emerald-700 font-semibold flex items-center gap-1">
-                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-600"></span>
-                    Verified
-                  </span>
-                </div>
-
-                <div className="grid grid-cols-3 gap-2">
-                  <button
-                    type="button"
-                    onClick={() => loginWithParichay('LEARNER')}
-                    disabled={isLoading}
-                    className="py-2 px-1.5 bg-slate-50 hover:bg-slate-100 text-slate-800 border border-slate-200 text-[11px] font-bold rounded-xl transition-colors text-center cursor-pointer"
-                  >
-                    Statistical Officer
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => loginWithParichay('TRAINER')}
-                    disabled={isLoading}
-                    className="py-2 px-1.5 bg-slate-50 hover:bg-slate-100 text-slate-800 border border-slate-200 text-[11px] font-bold rounded-xl transition-colors text-center cursor-pointer"
-                  >
-                    NSSTA Faculty
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => loginWithParichay('ADMINISTRATOR')}
-                    disabled={isLoading}
-                    className="py-2 px-1.5 bg-slate-50 hover:bg-slate-100 text-slate-800 border border-slate-200 text-[11px] font-bold rounded-xl transition-colors text-center cursor-pointer"
-                  >
-                    Cadre Admin
-                  </button>
-                </div>
               </div>
             </>
           ) : (
