@@ -17,7 +17,21 @@ import { DocumentIntelligenceModal } from './components/learner/DocumentIntellig
 import { Sparkles, MessageSquare } from 'lucide-react';
 
 const MainAppContent: React.FC = () => {
-  const { activeView, setIsAIMentorOpen } = useAuth();
+  const { activeView, isAuthReady, setIsAIMentorOpen } = useAuth();
+
+  // Show official loading state while authentication & session are restoring on startup
+  if (!isAuthReady) {
+    return (
+      <div className="min-h-screen flex flex-col items-center justify-center bg-[#f9f9ff] text-[#111c2d]">
+        <div className="flex flex-col items-center gap-3">
+          <div className="w-10 h-10 border-4 border-[#000a1e] border-t-[#fe9832] rounded-full animate-spin"></div>
+          <span className="text-xs font-bold uppercase tracking-wider text-[#000a1e]">
+            Verifying Officer Authentication Session...
+          </span>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen flex flex-col bg-[#f9f9ff] text-[#111c2d] font-['Inter',sans-serif]">

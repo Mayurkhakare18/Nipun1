@@ -639,6 +639,39 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   // Pending protected route destination after auth
   const pendingTabRef = useRef<string | null>(null);
 
+  // Helper to determine target tab after authentication or page refresh
+  const resolveTargetTab = useCallback((): string => {
+    let tab = pendingTabRef.current;
+    if (!tab && typeof window !== 'undefined') {
+      try {
+        const savedPending = sessionStorage.getItem('nipun_pending_tab');
+        if (savedPending) {
+          tab = savedPending;
+          sessionStorage.removeItem('nipun_pending_tab');
+        }
+        if (!tab) {
+          const urlParams = new URLSearchParams(window.location.search);
+          const qTab = urlParams.get('tab');
+          if (qTab) tab = qTab;
+        }
+        if (!tab) {
+          const savedActive = sessionStorage.getItem('nipun_active_tab');
+          if (savedActive) tab = savedActive;
+        }
+      } catch {}
+    }
+    return tab || 'dashboard';
+  }, []);
+
+  const handleSetActiveTab = useCallback((tab: string) => {
+    setActiveTab(tab);
+    if (typeof window !== 'undefined') {
+      try {
+        sessionStorage.setItem('nipun_active_tab', tab);
+      } catch {}
+    }
+  }, []);
+
   // Modals & Drawers
   const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
   const [authModalTab, setAuthModalTab] = useState<'signin' | 'register'>('signin');
@@ -713,6 +746,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       return;
     }
     setActiveTab(tab);
+    if (typeof window !== 'undefined') {
+      try {
+        sessionStorage.setItem('nipun_active_tab', tab);
+      } catch {}
+    }
     setActiveView('workspace');
     window.scrollTo({ top: 0, behavior: 'smooth' });
   }, [isLoading, isAuthReady, isAuthenticated, currentUser, openAuthModal, showNotification]);
@@ -742,7 +780,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     setGaps(DEFAULT_GAPS);
   }, []);
 
-  // Initialize and validate active session on startup using Supabase Auth
+  // Initialize and validate active session on startup using Supabase Auth as single source of truth
   const initSession = useCallback(async () => {
     setIsLoading(true);
     try {
@@ -762,52 +800,91 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         // Ignore
       }
 
-      // Check OAuth Redirect Auth
-      try {
-        const redirectRes = await supabaseService.checkRedirectAuth();
-        if (redirectRes?.user) {
-          await syncUserData(redirectRes.user);
-          setIsAuthReady(true);
-          setIsLoading(false);
-          showNotification('Google Authentication Verified', `Signed in as ${redirectRes.user.name} (${redirectRes.user.email})`);
-          return;
-        }
-      } catch (redirectErr) {
-        console.warn('[Google OAuth Init] Redirect check notice:', redirectErr);
-      }
-
-      // 1. Get real Supabase Auth session
-      const { data: { session }, error } = await supabase.auth.getSession();
+      // 1. Get real Supabase Auth session (handles both persisted session and fresh OAuth redirect tokens)
+      let { data: { session }, error } = await supabase.auth.getSession();
       if (error) {
         console.warn('[AuthContext] Supabase getSession note:', error.message);
+      }
+
+      // If returning from OAuth redirect with hash or query, but getSession hasn't caught up yet,
+      // poll briefly for Supabase to complete hash extraction
+      if (!session && typeof window !== 'undefined' && (window.location.hash.includes('access_token') || window.location.search.includes('code='))) {
+        for (let attempt = 0; attempt < 8; attempt++) {
+          await new Promise((resolve) => setTimeout(resolve, 150));
+          const { data: retryData } = await supabase.auth.getSession();
+          if (retryData?.session?.user) {
+            session = retryData.session;
+            break;
+          }
+        }
       }
 
       if (session?.user) {
         tokenStorage.set(session.access_token);
         const mappedUser = supabaseService.mapSessionUserToProfile(session.user);
         await syncUserData(mappedUser);
+
+        // Automatically navigate authenticated user directly to workspace dashboard
+        const targetTab = resolveTargetTab();
+        pendingTabRef.current = null;
+        setActiveTab(targetTab);
+        if (typeof window !== 'undefined') {
+          try {
+            sessionStorage.setItem('nipun_active_tab', targetTab);
+          } catch {}
+        }
+        setActiveView('workspace');
+
+        // Clean URL if OAuth tokens or code were in the URL
+        if (typeof window !== 'undefined' && (window.location.hash.includes('access_token') || window.location.search.includes('code='))) {
+          window.history.replaceState({}, document.title, window.location.pathname);
+          showNotification('Google Authentication Verified', `Signed in as ${mappedUser.name} (${mappedUser.email})`);
+        }
       } else {
         tokenStorage.clear();
         setCurrentUser(null);
         setIsAuthenticated(false);
+        setActiveView('landing');
       }
     } catch (err) {
       console.error('Session initialization error:', err);
       tokenStorage.clear();
       setCurrentUser(null);
       setIsAuthenticated(false);
+      setActiveView('landing');
     } finally {
       setIsAuthReady(true);
       setIsLoading(false);
     }
-  }, [syncUserData, showNotification]);
+  }, [syncUserData, resolveTargetTab, showNotification]);
 
   useEffect(() => {
     initSession();
 
     // 2. Subscribe to Supabase Auth state changes
     const { data: authListener } = supabase.auth.onAuthStateChange(async (event, session) => {
-      if (event === 'SIGNED_IN' || event === 'USER_UPDATED' || event === 'TOKEN_REFRESHED') {
+      if (event === 'SIGNED_IN') {
+        if (session?.user) {
+          tokenStorage.set(session.access_token);
+          const mappedUser = supabaseService.mapSessionUserToProfile(session.user);
+          await syncUserData(mappedUser);
+
+          // Automatically navigate to authenticated dashboard
+          const targetTab = resolveTargetTab();
+          pendingTabRef.current = null;
+          setActiveTab(targetTab);
+          if (typeof window !== 'undefined') {
+            try {
+              sessionStorage.setItem('nipun_active_tab', targetTab);
+            } catch {}
+          }
+          setActiveView('workspace');
+
+          if (typeof window !== 'undefined' && (window.location.hash.includes('access_token') || window.location.search.includes('code='))) {
+            window.history.replaceState({}, document.title, window.location.pathname);
+          }
+        }
+      } else if (event === 'USER_UPDATED' || event === 'TOKEN_REFRESHED') {
         if (session?.user) {
           tokenStorage.set(session.access_token);
           const mappedUser = supabaseService.mapSessionUserToProfile(session.user);
@@ -817,13 +894,20 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         tokenStorage.clear();
         setCurrentUser(null);
         setIsAuthenticated(false);
+        setActiveView('landing');
+        if (typeof window !== 'undefined') {
+          try {
+            sessionStorage.removeItem('nipun_active_tab');
+            sessionStorage.removeItem('nipun_pending_tab');
+          } catch {}
+        }
       }
     });
 
     return () => {
       authListener.subscription.unsubscribe();
     };
-  }, [initSession, syncUserData]);
+  }, [initSession, syncUserData, resolveTargetTab]);
 
   // Protected Modal Handlers
   const handleSetDemoSelectorOpen = useCallback((open: boolean) => {
@@ -1142,14 +1226,22 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       setIsLoading(true);
       setAuthError(null);
 
+      // Persist pending destination across OAuth redirect
+      if (pendingTabRef.current && typeof window !== 'undefined') {
+        try {
+          sessionStorage.setItem('nipun_pending_tab', pendingTabRef.current);
+        } catch {}
+      }
+
       const { user } = await supabaseService.signInWithGoogle();
       if (user) {
         await syncUserData(user);
         setIsAuthModalOpen(false);
         showNotification('Google Authentication Successful', `Welcome to NIPUN, ${user.name}.`, 'success');
-        const targetTab = pendingTabRef.current || 'dashboard';
+        const targetTab = resolveTargetTab();
         pendingTabRef.current = null;
-        launchWorkspace(targetTab);
+        setActiveTab(targetTab);
+        setActiveView('workspace');
         return true;
       }
       return true;
@@ -1194,6 +1286,12 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       setActiveIgotCourse(null);
       setActiveNsstaProgram(null);
       setActiveView('landing');
+      if (typeof window !== 'undefined') {
+        try {
+          sessionStorage.removeItem('nipun_active_tab');
+          sessionStorage.removeItem('nipun_pending_tab');
+        } catch {}
+      }
       showNotification('Session Ended', 'You have been securely signed out of the official statistical system.');
     } catch (err) {
       console.error('Logout error:', err);
@@ -1324,7 +1422,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         activeView,
         setActiveView,
         activeTab,
-        setActiveTab,
+        setActiveTab: handleSetActiveTab,
         switchUserRole,
         resetDemoData,
         refreshUserData,
