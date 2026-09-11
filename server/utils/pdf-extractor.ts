@@ -1,7 +1,4 @@
-import { createRequire } from 'module';
-
-const require = createRequire(import.meta.url);
-const pdfParseModule = require('pdf-parse');
+import zlib from 'zlib';
 
 export const MAX_PDF_SIZE_BYTES = 15 * 1024 * 1024; // 15 MB
 
@@ -26,7 +23,7 @@ export function validatePdfBuffer(buffer: Buffer, fileName: string): PdfValidati
   if (!buffer || buffer.length === 0) {
     return {
       valid: false,
-      error: 'Uploaded file is empty or corrupted (0 bytes).',
+      error: 'Uploaded file is empty. Please provide a valid PDF document.',
       fileSizeBytes: 0,
     };
   }
@@ -34,16 +31,15 @@ export function validatePdfBuffer(buffer: Buffer, fileName: string): PdfValidati
   if (buffer.length > MAX_PDF_SIZE_BYTES) {
     return {
       valid: false,
-      error: `File size (${Math.round(buffer.length / (1024 * 1024))} MB) exceeds the 15MB limit.`,
+      error: `File size exceeds the 15MB limit (received ${(buffer.length / (1024 * 1024)).toFixed(2)}MB).`,
       fileSizeBytes: buffer.length,
     };
   }
 
-  const cleanName = (fileName || '').toLowerCase();
-  if (!cleanName.endsWith('.pdf')) {
+  if (!fileName || !fileName.toLowerCase().endsWith('.pdf')) {
     return {
       valid: false,
-      error: 'Invalid file extension. Only genuine PDF documents (.pdf) are permitted.',
+      error: 'Invalid file extension. Only .pdf documents are supported.',
       fileSizeBytes: buffer.length,
     };
   }
@@ -86,7 +82,107 @@ export function cleanExtractedText(rawText: string): string {
 }
 
 /**
- * Extracts text from PDF buffer using both v1 and v2 pdf-parse interfaces.
+ * Native Pure-JS fallback extractor for environments (e.g. Vercel Serverless) where
+ * native or binary pdf-parse dependencies might encounter environment constraints.
+ */
+function extractPdfNatively(buffer: Buffer): { text: string; pageCount: number; pages: { text: string; num: number }[] } {
+  const binaryContent = buffer.toString('binary');
+  let extractedAll = '';
+  const pages: { text: string; num: number }[] = [];
+
+  // Count /Type /Page occurrences for estimated page count
+  const pageMatches = binaryContent.match(/\/Type\s*\/Page[^s]/g);
+  const pageCount = pageMatches ? Math.max(1, pageMatches.length) : 1;
+
+  // Extract all text inside streams
+  const streamRegex = /stream\r?\n([\s\S]*?)\r?\nendstream/g;
+  let match: RegExpExecArray | null;
+
+  while ((match = streamRegex.exec(binaryContent)) !== null) {
+    const rawStream = Buffer.from(match[1], 'binary');
+    let streamText = '';
+
+    try {
+      streamText = zlib.inflateSync(rawStream).toString('utf8');
+    } catch {
+      try {
+        streamText = zlib.inflateRawSync(rawStream).toString('utf8');
+      } catch {
+        streamText = rawStream.toString('utf8');
+      }
+    }
+
+    // Extract BT ... ET blocks
+    const btRegex = /BT[\s\S]*?ET/g;
+    let btMatch: RegExpExecArray | null;
+
+    while ((btMatch = btRegex.exec(streamText)) !== null) {
+      const block = btMatch[0];
+
+      // Match (text) Tj
+      const tjRegex = /\((.*?)\)\s*Tj/g;
+      let tjMatch: RegExpExecArray | null;
+      while ((tjMatch = tjRegex.exec(block)) !== null) {
+        extractedAll += tjMatch[1].replace(/\\([()\\])/g, '$1') + ' ';
+      }
+
+      // Match [(text)...] TJ
+      const tjArrayRegex = /\[(.*?)\]\s*TJ/g;
+      let tjArrMatch: RegExpExecArray | null;
+      while ((tjArrMatch = tjArrayRegex.exec(block)) !== null) {
+        const parts = tjArrMatch[1].match(/\((.*?)\)/g) || [];
+        for (const p of parts) {
+          extractedAll += p.slice(1, -1).replace(/\\([()\\])/g, '$1') + ' ';
+        }
+      }
+
+      extractedAll += '\n';
+    }
+  }
+
+  const cleaned = cleanExtractedText(extractedAll);
+  pages.push({ text: cleaned, num: 1 });
+
+  return {
+    text: cleaned,
+    pageCount,
+    pages,
+  };
+}
+
+/**
+ * Dynamically resolves pdf-parse module only when needed.
+ * Prevents module-import crashes in serverless runtime environments.
+ */
+let cachedPdfParser: any = null;
+let parserResolutionAttempted = false;
+
+async function getPdfParser(): Promise<any> {
+  if (cachedPdfParser) return cachedPdfParser;
+  if (parserResolutionAttempted) return null;
+
+  parserResolutionAttempted = true;
+  try {
+    const mod = await import('pdf-parse');
+    cachedPdfParser = mod.PDFParse || (mod as any).default?.PDFParse || (mod as any).default || mod;
+    return cachedPdfParser;
+  } catch (err1) {
+    try {
+      const { createRequire } = await import('module');
+      const req = createRequire(import.meta.url);
+      const mod2 = req('pdf-parse');
+      cachedPdfParser = mod2.PDFParse || mod2.default || mod2;
+      return cachedPdfParser;
+    } catch (err2) {
+      console.warn('[PDFExtractor] pdf-parse dynamic import unavailable, using native stream extractor');
+      return null;
+    }
+  }
+}
+
+/**
+ * Extracts text from PDF buffer using both v1 and v2 pdf-parse interfaces,
+ * with pure-JS stream extraction fallback.
  * Detects scanned/image-only PDFs where no digital text stream exists.
  */
 export async function extractPdfText(
@@ -102,77 +198,83 @@ export async function extractPdfText(
   let pageCount = 1;
   let pagesList: Array<{ text: string; num: number }> = [];
 
-  try {
-    if (typeof pdfParseModule === 'function') {
-      const v1Data = await pdfParseModule(buffer);
-      extractedRawText = v1Data.text || '';
-      pageCount = v1Data.numpages || 1;
-    } else if (pdfParseModule?.PDFParse) {
-      const parser = new pdfParseModule.PDFParse({ data: buffer });
-      try {
-        const textRes = await parser.getText();
-        extractedRawText = textRes.text || '';
-        pageCount = textRes.total || (Array.isArray(textRes.pages) ? textRes.pages.length : 1);
-        if (Array.isArray(textRes.pages)) {
-          pagesList = textRes.pages;
-        }
-      } finally {
-        if (typeof parser.destroy === 'function') {
-          await parser.destroy();
+  const Parser = await getPdfParser();
+
+  if (Parser) {
+    try {
+      if (typeof Parser === 'function' && !Parser.prototype?.getText) {
+        const v1Data = await Parser(buffer);
+        extractedRawText = v1Data.text || '';
+        pageCount = v1Data.numpages || 1;
+      } else if (typeof Parser === 'function' || Parser?.PDFParse) {
+        const TargetClass = Parser.PDFParse || Parser;
+        const parserInstance = new TargetClass({ data: buffer });
+        try {
+          const textRes = await parserInstance.getText();
+          extractedRawText = textRes.text || '';
+          pageCount = textRes.total || (Array.isArray(textRes.pages) ? textRes.pages.length : 1);
+          if (Array.isArray(textRes.pages)) {
+            pagesList = textRes.pages;
+          }
+        } finally {
+          if (typeof parserInstance.destroy === 'function') {
+            await parserInstance.destroy();
+          }
         }
       }
-    } else if (pdfParseModule?.default) {
-      const v1Data = await pdfParseModule.default(buffer);
-      extractedRawText = v1Data.text || '';
-      pageCount = v1Data.numpages || 1;
-    } else {
-      throw new Error('No compatible PDF parser found in module exports.');
+    } catch (parseErr) {
+      console.warn('[PDFExtractor] pdf-parse threw error, switching to native stream extractor:', parseErr);
     }
-  } catch (err: any) {
-    console.error(`[PDF_PARSE_ERROR] Failed parsing "${fileName}":`, err?.message || String(err));
-    throw new Error(`Failed to parse PDF document "${fileName}": ${err?.message || 'Corrupt PDF structure'}`);
+  }
+
+  // If pdf-parse failed or returned no text, run native stream extractor
+  if (!extractedRawText || extractedRawText.trim().length === 0) {
+    const nativeRes = extractPdfNatively(buffer);
+    extractedRawText = nativeRes.text;
+    pageCount = Math.max(pageCount, nativeRes.pageCount);
+    if (pagesList.length === 0) {
+      pagesList = nativeRes.pages;
+    }
   }
 
   const cleanedText = cleanExtractedText(extractedRawText);
-  const wordTokens = cleanedText.split(/\s+/).filter((w) => w.length > 1);
 
-  // Scanned / image-only detection:
-  // If fewer than 40 characters or fewer than 6 recognizable words, document is scanned/image-based
-  if (cleanedText.length < 40 || wordTokens.length < 6) {
-    return {
-      text: '',
-      pageCount,
-      isScanned: true,
-    };
-  }
+  // Scanned / Image-Only PDF Detection:
+  // If fewer than 30 non-whitespace characters exist, the PDF is an image-only / scanned document.
+  const isScanned = cleanedText.length < 30;
 
-  // Construct grounded page reference points from genuine page text
+  // Build page reference index
   const pageReferences: { page: number; point: string }[] = [];
   if (pagesList.length > 0) {
-    for (const p of pagesList) {
-      const pClean = cleanExtractedText(p.text || '');
-      const firstLine = pClean.split('\n').find((l) => l.length > 25);
+    pagesList.forEach((p, idx) => {
+      const pageNum = p.num || idx + 1;
+      const firstLine = p.text
+        ? cleanExtractedText(p.text)
+            .split('\n')
+            .find((l) => l.length > 15)
+        : undefined;
       if (firstLine) {
         pageReferences.push({
-          page: p.num,
-          point: firstLine.slice(0, 150),
+          page: pageNum,
+          point: firstLine.slice(0, 100).trim(),
         });
       }
-    }
-  } else {
-    const lines = cleanedText.split('\n').filter((l) => l.length > 25);
-    for (let i = 0; i < Math.min(lines.length, 8); i++) {
+    });
+  } else if (!isScanned) {
+    // Generate logical chunks for references
+    const paragraphs = cleanedText.split('\n\n').filter((p) => p.length > 20);
+    paragraphs.slice(0, 8).forEach((p, idx) => {
       pageReferences.push({
-        page: Math.min(pageCount, Math.floor(i / 2) + 1),
-        point: lines[i].slice(0, 150),
+        page: Math.floor(idx / 2) + 1,
+        point: p.slice(0, 90).trim(),
       });
-    }
+    });
   }
 
   return {
     text: cleanedText,
-    pageCount,
-    isScanned: false,
+    pageCount: Math.max(1, pageCount),
+    isScanned,
     pageReferences,
   };
 }
