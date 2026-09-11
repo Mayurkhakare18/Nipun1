@@ -1825,6 +1825,17 @@ export function createExpressApp() {
       res.json({
         success: true,
         assessment: newAssessment,
+        questions: finalQuestions,
+        context: {
+          courseId: courseId || null,
+          courseTitle: targetCourseTitle || null,
+          competencyId: targetCompId,
+          competencyName: targetCompName,
+          currentLevel,
+          requiredLevel,
+          gapSize,
+          difficulty,
+        },
         personalization: {
           courseId: courseId || null,
           courseTitle: targetCourseTitle || null,
@@ -2365,14 +2376,14 @@ Key Topics:
         materialsRes,
         recommendationsRes,
       ] = await Promise.all([
-        serverSupabase.from('official_profiles').select('*, departments(*), roles(*)').eq('user_id', user.id).maybeSingle(),
+        serverSupabase.from('official_profiles').select('*, departments(*)').eq('user_id', user.id).maybeSingle(),
         serverSupabase.from('learner_competencies').select('*, competencies(*)').eq('user_id', user.id),
         serverSupabase.from('skill_gaps').select('*').eq('user_id', user.id),
         serverSupabase.from('learning_paths').select('*').eq('user_id', user.id).maybeSingle(),
         serverSupabase.from('learning_progress').select('*').order('step_number', { ascending: true }).limit(10),
         serverSupabase.from('assessment_attempts').select('*').eq('user_id', user.id).order('completed_at', { ascending: false }).limit(5),
         serverSupabase.from('uploaded_learning_materials').select('*').order('uploaded_at', { ascending: false }).limit(5),
-        serverSupabase.from('recommendations').select('*, courses(*), training_programmes(*)').eq('user_id', user.id).limit(5),
+        serverSupabase.from('recommendations').select('*, courses(*)').eq('user_id', user.id).limit(5),
       ]);
 
       const officialProfile = profileRes.data || {};
