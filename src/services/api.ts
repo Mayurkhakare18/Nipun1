@@ -6,6 +6,7 @@ import {
   UnifiedRecommendation,
   LearningPath,
   QuizAssessment,
+  QuizQuestion,
   QuizAttemptResult,
   UploadedDocument,
   DocumentSummaryResult,
@@ -109,7 +110,9 @@ async function fetchWithAuth(url: string, options: RequestInit = {}, retries = 2
   const targetUrl = resolveApiUrl(url);
 
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 8000);
+  const isAiRoute = targetUrl.includes('/ai/') || targetUrl.includes('/documents/') || targetUrl.includes('/personalized') || targetUrl.includes('/assistant');
+  const timeoutMs = (options as any)?.timeoutMs || (isAiRoute ? 45000 : 15000);
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
 
   try {
     const res = await fetch(targetUrl, {
@@ -580,17 +583,43 @@ export const api = {
   },
 
   async submitAssessment(
-    assessmentId: string,
-    answers: number[],
-    timeSpentSeconds: number,
+    paramOrId: string | { assessmentId: string; answers: number[]; timeSpentSeconds: number; questions?: any; competency?: string },
+    posAnswers?: number[],
+    posTimeSpentSeconds?: number,
     assessmentContext?: QuizAssessment | null
-  ): Promise<{ success: boolean; result: QuizAttemptResult; upgradeRecord?: any; competencies?: any; gaps?: any }> {
-    const targetAssessment =
-      assessmentContext ||
-      CLIENT_ASSESSMENTS.find((a) => a.id === assessmentId) ||
-      CLIENT_ASSESSMENTS.find((a) => a.id.toLowerCase() === (assessmentId || '').toLowerCase()) ||
-      CLIENT_ASSESSMENTS.find((a) => a.competency.toLowerCase().includes((assessmentId || '').toLowerCase()) || (assessmentId || '').toLowerCase().includes(a.competency.toLowerCase())) ||
-      CLIENT_ASSESSMENTS[0];
+  ): Promise<{ success: boolean; result: QuizAttemptResult; upgradeRecord?: any; competencies?: any; gaps?: any; message?: string }> {
+    const assessmentId: string = typeof paramOrId === 'string'
+      ? paramOrId
+      : (paramOrId?.assessmentId || 'assess-py-l3');
+    const answers: number[] = typeof paramOrId === 'object' && paramOrId !== null && Array.isArray(paramOrId.answers)
+      ? paramOrId.answers
+      : (posAnswers || []);
+    const timeSpentSeconds: number = typeof paramOrId === 'object' && paramOrId !== null && typeof paramOrId.timeSpentSeconds === 'number'
+      ? paramOrId.timeSpentSeconds
+      : (posTimeSpentSeconds || 180);
+    const customQuestions: QuizQuestion[] | undefined = typeof paramOrId === 'object' && paramOrId !== null
+      ? paramOrId.questions
+      : undefined;
+    const customComp: string | undefined = typeof paramOrId === 'object' && paramOrId !== null
+      ? paramOrId.competency
+      : undefined;
+
+    const targetAssessment: QuizAssessment =
+      (customQuestions && Array.isArray(customQuestions) && customQuestions.length > 0)
+        ? {
+            id: assessmentId || `assess-custom-${Date.now()}`,
+            title: `${customComp || 'Competency'} Assessment`,
+            description: 'Custom evaluated assessment',
+            competency: customComp || 'Python',
+            timeLimitMinutes: 15,
+            passingScore: 70,
+            questions: customQuestions,
+          }
+        : (assessmentContext ||
+          CLIENT_ASSESSMENTS.find((a) => a.id === assessmentId) ||
+          CLIENT_ASSESSMENTS.find((a) => a.id.toLowerCase() === assessmentId.toLowerCase()) ||
+          CLIENT_ASSESSMENTS.find((a) => a.competency.toLowerCase().includes(assessmentId.toLowerCase()) || assessmentId.toLowerCase().includes(a.competency.toLowerCase())) ||
+          CLIENT_ASSESSMENTS[0]);
 
     let correctCount = 0;
     const topicMap: Record<string, { correct: number; total: number }> = {};
@@ -708,7 +737,8 @@ export const api = {
 
   async summarizeAndGenerateFromDocument(data: {
     fileName: string;
-    fileContent: string;
+    fileContent?: string;
+    fileBase64?: string;
     competency?: string;
     difficulty?: string;
     questionCount?: number;
@@ -719,78 +749,25 @@ export const api = {
     document: UploadedDocument;
     message?: string;
   }> {
-    const comp = data.competency || 'Survey Methodology';
-    const qCount = Math.min(10, Math.max(3, Number(data.questionCount) || 5));
     const cleanContent = (data.fileContent || '').trim();
+    const hasBase64 = Boolean(data.fileBase64 && data.fileBase64.trim());
 
-    // If PDF text extraction yielded empty or unreadable text
-    if (!cleanContent) {
+    if (!cleanContent && !hasBase64) {
       return {
         success: false,
         summary: null as any,
         assessment: null as any,
         document: null as any,
-        message: 'Text could not be extracted from this PDF.',
+        message: 'Document content or binary PDF data is required for analysis.',
       };
     }
 
-    const fallbackSummary: DocumentSummaryResult = {
-      fileName: data.fileName || 'MoSPI_Document.pdf',
-      fileSizeFormatted: `${Math.round(cleanContent.length / 1024) || 8} KB`,
-      executiveSummary: `Executive Analysis of "${data.fileName}":\nThe document provides authoritative guidelines for ${comp} within official statistical operations. Key principles cover data collection procedures, statistical control mechanisms, and cadre deployment standards aligned with MoSPI frameworks.`,
-      keyMethodologicalPoints: [
-        `Grounded Methodology: Implements multi-stage sampling with non-response multiplier calibrations for ${comp}.`,
-        `Quality Assurance: Standardized validation rules prevent data corruption during primary data entry and aggregation.`,
-        `Governance Alignment: Fully compliant with MoSPI data release standards and national statistical framework standards.`,
-        `Auditing & Microdata Integrity: Unit-level record microaggregation safeguards respondent confidentiality while preserving statistical power.`,
-      ],
-      cadreImplications: `Direct implications for Assistant Directors & Statistical Officers: Requires verified operational mastery of ${comp} routines, automated error handling, and adherence to official survey schedules.`,
-      targetCompetencies: [comp],
-      extractedFormulasOrStandards: [
-        `W_hij = (1 / P_hi) * (1 / m_hi) * (N_hi / n_hi)`,
-        `k-Anonymity (k >= 5) on demographic Quasi-Identifiers`,
-      ],
-      generatedQuestions: [
-        {
-          id: `doc-q1-${Date.now()}`,
-          question: `According to the methodological guidelines in ${data.fileName}, which procedure guarantees statistical calibration across survey strata?`,
-          options: [
-            'Design multiplier weighting with non-response adjustment factors',
-            'Simple random sampling without replacement across all units',
-            'Unweighted arithmetic average computation',
-            'Manual deletion of non-responding households',
-          ],
-          correctAnswer: 0,
-          explanation: 'Design multiplier weighting combined with non-response adjustments preserves population estimator unbiasedness.',
-          difficulty: (data.difficulty as any) || 'Medium',
-          competency: comp,
-          topic: `${comp} Standards`,
-          sourceReference: data.fileName,
-        },
-        {
-          id: `doc-q2-${Date.now()}`,
-          question: `What is the primary compliance requirement highlighted for unit-level microdata disaggregation in official publications?`,
-          options: [
-            'k-Anonymity (k >= 5) and top-coding of upper-percentile continuous variables',
-            'Storing unencrypted respondent phone numbers for quick verification',
-            'Limiting dataset size to under 5 megabytes',
-            'Removing all geographic stratum identifiers',
-          ],
-          correctAnswer: 0,
-          explanation: 'k-Anonymity (k >= 5) prevents re-identification of individual respondents under DPDP Act & NDSAP rules.',
-          difficulty: (data.difficulty as any) || 'Medium',
-          competency: comp,
-          topic: 'Statistical Disclosure Control',
-          sourceReference: data.fileName,
-        },
-      ].slice(0, qCount),
-    };
-
-    const res = await safeFetchJson<{
+    return safeFetchJson<{
       success: boolean;
-      summary: DocumentSummaryResult;
+      summary: any;
       assessment: QuizAssessment;
       document: UploadedDocument;
+      error?: string;
       message?: string;
     }>(
       '/api/documents/summarize-and-generate',
@@ -799,64 +776,58 @@ export const api = {
         body: JSON.stringify(data),
       },
       {
-        success: true,
-        summary: fallbackSummary,
-        assessment: {
-          id: `assess-doc-${Date.now()}`,
-          title: `Diagnostic Assessment: ${data.fileName}`,
-          description: `Targeted dynamic diagnostic evaluating verified competency in ${comp}.`,
-          competency: comp,
-          timeLimitMinutes: 10,
-          passingScore: 70,
-          questions: fallbackSummary.generatedQuestions,
-        },
-        document: {
-          id: `doc-${Date.now()}`,
-          fileName: data.fileName,
-          uploadedAt: new Date().toISOString(),
-          fileSizeFormatted: `${Math.round(cleanContent.length / 1024) || 8} KB`,
-          status: 'PROCESSED',
-          competency: comp,
-        },
-        message: 'Document intelligence report generated.',
+        success: false,
+        summary: null as any,
+        assessment: null as any,
+        document: null as any,
+        message: 'Failed to process document with Gemini AI.',
       }
     );
+  },
 
-    if (!res.success || !res.summary) {
-      if (res.message === 'Text could not be extracted from this PDF.' || (res as any).error === 'TEXT_EXTRACTION_FAILED') {
-        return {
-          success: false,
-          summary: null as any,
-          assessment: null as any,
-          document: null as any,
-          message: 'Text could not be extracted from this PDF.',
-        };
+  // Personalized Assessment Generation
+  async getPersonalizedAssessment(params: {
+    courseId?: string;
+    competencyId?: string;
+    difficulty?: string;
+    count?: number;
+  }): Promise<{
+    success: boolean;
+    assessment: QuizAssessment;
+    personalization?: any;
+    message?: string;
+  }> {
+    return safeFetchJson(
+      '/api/assessments/personalized',
+      {
+        method: 'POST',
+        body: JSON.stringify(params),
+      },
+      {
+        success: false,
+        assessment: null as any,
+        message: 'Failed to generate personalized assessment.',
       }
-      return {
-        success: true,
-        summary: fallbackSummary,
-        assessment: {
-          id: `assess-doc-${Date.now()}`,
-          title: `Diagnostic Assessment: ${data.fileName}`,
-          description: `Targeted dynamic diagnostic evaluating verified competency in ${comp}.`,
-          competency: comp,
-          timeLimitMinutes: 10,
-          passingScore: 70,
-          questions: fallbackSummary.generatedQuestions,
-        },
-        document: {
-          id: `doc-${Date.now()}`,
-          fileName: data.fileName,
-          uploadedAt: new Date().toISOString(),
-          fileSizeFormatted: `${Math.round(cleanContent.length / 1024) || 8} KB`,
-          status: 'PROCESSED',
-          competency: comp,
-        },
-        message: 'Document intelligence report generated.',
-      };
-    }
+    );
+  },
 
-    return res;
+  // AI Health Check
+  async checkAiHealth(): Promise<{
+    configured: boolean;
+    provider: string;
+    model: string;
+    error?: string;
+  }> {
+    return safeFetchJson(
+      '/api/ai/health',
+      {},
+      {
+        configured: false,
+        provider: 'gemini',
+        model: 'none',
+        error: 'AI health endpoint unavailable.',
+      }
+    );
   },
 
   // Post-Learning Reassessment
@@ -952,17 +923,20 @@ export const api = {
     success: boolean;
     reply: string;
     suggestedActions?: { label: string; actionType: string; payload?: any }[];
+    contextSummary?: any;
     timestamp: string;
+    error?: string;
   }> {
     return safeFetchJson(
-      '/api/assistant/chat',
+      '/api/ai/assistant',
       {
         method: 'POST',
         body: JSON.stringify({ message, history }),
       },
       {
-        success: true,
-        reply: `Namaste. I am your NIPUN Statistical Capacity Assistant. Based on your official profile, I am ready to assist you with sampling formulas, Python data pipelines, national accounts balancing, and diagnostic quizzes.`,
+        success: false,
+        reply: '',
+        error: 'AI service temporarily unavailable',
         timestamp: new Date().toISOString(),
       }
     );

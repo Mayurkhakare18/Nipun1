@@ -90,7 +90,7 @@ How can I assist your statistical learning journey today?`,
     try {
       const history = messages.slice(-6).map((m) => ({ sender: m.sender, content: m.content }));
       const res = await api.sendMentorMessage(text, history);
-      if (res.success) {
+      if (res.success && res.reply) {
         const botMsg: AIMentorMessage = {
           id: `bot-${Date.now()}`,
           sender: 'mentor',
@@ -99,9 +99,26 @@ How can I assist your statistical learning journey today?`,
           suggestedActions: res.suggestedActions,
         };
         setMessages((prev) => [...prev, botMsg]);
+      } else {
+        const errorMsg: AIMentorMessage = {
+          id: `err-${Date.now()}`,
+          sender: 'mentor',
+          content: `⚠️ **AI Service Notice**: ${res.error || 'Gemini AI assistant is temporarily unavailable. Please verify connection and retry.'}`,
+          timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        };
+        setMessages((prev) => [...prev, errorMsg]);
+        showNotification('AI Service Unavailable', res.error || 'Could not reach Gemini AI assistant.', 'warning');
       }
-    } catch (err) {
+    } catch (err: any) {
       console.error('Mentor chat error:', err);
+      const errorMsg: AIMentorMessage = {
+        id: `err-${Date.now()}`,
+        sender: 'mentor',
+        content: `⚠️ **Connection Error**: ${err?.message || 'Network request failed while contacting AI Assistant.'}`,
+        timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+      };
+      setMessages((prev) => [...prev, errorMsg]);
+      showNotification('Network Error', 'Could not contact AI Assistant server.', 'warning');
     } finally {
       setIsTyping(false);
     }
@@ -293,11 +310,11 @@ How can I assist your statistical learning journey today?`,
               })}
 
               {isTyping && (
-                <div className="flex items-center gap-2 text-xs text-[#74777f] p-2.5 bg-white rounded-xl border border-[#c4c6cf]/30 w-fit shadow-2xs">
-                  <div className="w-6 h-6 rounded-lg bg-[#fe9832]/20 text-[#fe9832] flex items-center justify-center animate-pulse">
-                    <Bot className="w-3.5 h-3.5" />
+                <div className="flex items-center gap-2 text-xs text-[#002147] p-2.5 bg-[#f0f3ff] rounded-xl border border-[#c4c6cf]/40 w-fit shadow-2xs animate-pulse">
+                  <div className="w-6 h-6 rounded-lg bg-[#fe9832]/20 text-[#fe9832] flex items-center justify-center">
+                    <Sparkles className="w-3.5 h-3.5 animate-spin" />
                   </div>
-                  <span>Formulating statistical capacity guidance...</span>
+                  <span className="font-semibold">Thinking... (Analyzing official NIPUN profile)</span>
                 </div>
               )}
               <div ref={messagesEndRef} />

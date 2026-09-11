@@ -821,6 +821,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
       if (session?.user) {
         tokenStorage.set(session.access_token);
+        try {
+          await supabase.realtime.setAuth(session.access_token);
+        } catch (rtErr) {
+          console.warn('[AuthContext] realtime setAuth notice:', rtErr);
+        }
         const mappedUser = supabaseService.mapSessionUserToProfile(session.user);
         await syncUserData(mappedUser);
 
@@ -866,6 +871,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       if (event === 'SIGNED_IN') {
         if (session?.user) {
           tokenStorage.set(session.access_token);
+          try {
+            await supabase.realtime.setAuth(session.access_token);
+          } catch (rtErr) {
+            console.warn('[AuthContext] realtime setAuth notice:', rtErr);
+          }
           const mappedUser = supabaseService.mapSessionUserToProfile(session.user);
           await syncUserData(mappedUser);
 
@@ -887,11 +897,19 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       } else if (event === 'USER_UPDATED' || event === 'TOKEN_REFRESHED') {
         if (session?.user) {
           tokenStorage.set(session.access_token);
+          try {
+            await supabase.realtime.setAuth(session.access_token);
+          } catch (rtErr) {
+            console.warn('[AuthContext] realtime setAuth notice:', rtErr);
+          }
           const mappedUser = supabaseService.mapSessionUserToProfile(session.user);
           await syncUserData(mappedUser);
         }
       } else if (event === 'SIGNED_OUT') {
         tokenStorage.clear();
+        try {
+          await supabase.realtime.setAuth(null as any);
+        } catch {}
         setCurrentUser(null);
         setIsAuthenticated(false);
         setActiveView('landing');
@@ -1052,6 +1070,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       }
 
       tokenStorage.set(data.session.access_token);
+      try {
+        await supabase.realtime.setAuth(data.session.access_token);
+      } catch (rtErr) {
+        console.warn('[AuthContext] realtime setAuth notice:', rtErr);
+      }
       const user = supabaseService.mapSessionUserToProfile(data.user);
 
       // Ensure public.users and official_profiles record exists
@@ -1191,6 +1214,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
       if (data.session?.access_token) {
         tokenStorage.set(data.session.access_token);
+        try {
+          await supabase.realtime.setAuth(data.session.access_token);
+        } catch (rtErr) {
+          console.warn('[AuthContext] realtime setAuth notice:', rtErr);
+        }
         await syncUserData(user);
         setIsAuthModalOpen(false);
         showNotification(

@@ -34,6 +34,7 @@ export const QuizModal: React.FC = () => {
   } = useAuth();
 
   const [assessment, setAssessment] = useState<QuizAssessment | null>(null);
+  const [personalizationContext, setPersonalizationContext] = useState<any | null>(null);
   const [currentQuestionIndex, setCurrentQuestionIndex] = useState(0);
   const [selectedAnswers, setSelectedAnswers] = useState<number[]>([]);
   const [flaggedQuestions, setFlaggedQuestions] = useState<boolean[]>([]);
@@ -55,10 +56,42 @@ export const QuizModal: React.FC = () => {
         setQuizResult(null);
         setSubmissionError(null);
         setCurrentQuestionIndex(0);
+        setPersonalizationContext(null);
 
         const id = activeQuizId || 'assess-py-l3';
-        const res = await api.getAssessmentById(id);
-        if (res.success && res.assessment) {
+        let res: any = null;
+
+        // If ID is a course, competency, or non-static assessment ID, fetch personalized assessment
+        const isCourse = id.startsWith('cat-') || id.startsWith('course-');
+        const isCompetency = id.startsWith('comp-') || (!id.startsWith('assess-') && !id.startsWith('gen-'));
+
+        if (isCourse || isCompetency) {
+          const persRes = await api.getPersonalizedAssessment({
+            courseId: isCourse ? id : undefined,
+            competencyId: !isCourse ? id : undefined,
+          });
+          if (persRes.success && persRes.assessment) {
+            res = persRes;
+            setPersonalizationContext(persRes.personalization || null);
+          }
+        }
+
+        if (!res?.assessment) {
+          res = await api.getAssessmentById(id);
+        }
+
+        if (!res?.assessment) {
+          // Fallback to personalized course assessment
+          const fallbackPers = await api.getPersonalizedAssessment({
+            competencyId: 'comp-tech-01',
+          });
+          if (fallbackPers.success && fallbackPers.assessment) {
+            res = fallbackPers;
+            setPersonalizationContext(fallbackPers.personalization || null);
+          }
+        }
+
+        if (res && res.assessment) {
           setAssessment(res.assessment);
           setSelectedAnswers(new Array(res.assessment.questions.length).fill(-1));
           setFlaggedQuestions(new Array(res.assessment.questions.length).fill(false));
@@ -110,14 +143,15 @@ export const QuizModal: React.FC = () => {
       setIsGeneratingFresh(true);
       setSubmissionError(null);
       const comp = targetComp || assessment?.competency || 'Python';
-      const res = await api.generateFreshAssessment({
-        competency: comp,
+      const res = await api.getPersonalizedAssessment({
+        competencyId: comp,
         difficulty: 'Medium',
-        questionCount: 4,
+        count: 4,
       });
 
       if (res.success && res.assessment) {
         setAssessment(res.assessment);
+        setPersonalizationContext(res.personalization || null);
         setSelectedAnswers(new Array(res.assessment.questions.length).fill(-1));
         setFlaggedQuestions(new Array(res.assessment.questions.length).fill(false));
         setTimeLeftSeconds(res.assessment.timeLimitMinutes * 60);
@@ -125,13 +159,14 @@ export const QuizModal: React.FC = () => {
         setQuizResult(null);
 
         showNotification(
-          'Fresh Assessment Generated',
-          `Generated ${res.assessment.questions.length} brand new AI questions for ${comp}.`,
+          'Personalized Assessment Generated',
+          `Generated ${res.assessment.questions.length} personalized questions for ${comp}.`,
           'success'
         );
       }
-    } catch (err) {
+    } catch (err: any) {
       console.error('Failed to generate fresh questions:', err);
+      setSubmissionError(err?.message || 'Failed to generate personalized questions.');
     } finally {
       setIsGeneratingFresh(false);
     }
@@ -141,65 +176,64 @@ export const QuizModal: React.FC = () => {
     if (!assessment || isSubmitting) return;
 
     try {
-      console.log('[QUIZ] submit started');
       setIsSubmitting(true);
       setSubmissionError(null);
-      const timeSpent = Math.max(15, (assessment.timeLimitMinutes * 60) - timeLeftSeconds);
-      
-      const res = await api.submitAssessment(assessment.id, selectedAnswers, timeSpent, assessment);
-      console.log('[QUIZ] API response status: 200 OK');
-      console.log('[QUIZ] API response body:', res);
 
-      if (res && res.result) {
-        console.log('[QUIZ] parsed result:', res.result);
-        console.log('[QUIZ] setting result state');
+      const timeSpent = Math.max(1, (assessment.timeLimitMinutes * 60) - timeLeftSeconds);
+      const res = await api.submitAssessment({
+        assessmentId: assessment.id,
+        answers: selectedAnswers,
+        timeSpentSeconds: timeSpent,
+        questions: assessment.questions,
+        competency: assessment.competency,
+      });
+
+      if (res.success && res.result) {
         setQuizResult(res.result);
-        console.log('[QUIZ] changing to result state');
+        refreshUserData();
 
-        if (res.result.scorePercentage >= (assessment.passingScore || 70)) {
-          try {
-            confetti({
-              particleCount: 120,
-              spread: 80,
-              origin: { y: 0.6 },
-            });
-          } catch (cErr) {
-            // Non-blocking confetti failure fallback
-          }
-
+        if (res.result.passed) {
           showNotification(
-            'Competency Level Elevated!',
-            `You passed with ${res.result.scorePercentage}%. Verified in National Competency Passport!`,
+            'Assessment Passed!',
+            `Elevated competency to Level ${res.result.updatedCompetencyLevel}. Recorded in National Passport.`,
             'success'
           );
         } else {
           showNotification(
             'Assessment Completed',
-            `Score: ${res.result.scorePercentage}%. Passing required: ${assessment.passingScore || 70}%. Review recommendations and retry.`,
+            `Score: ${res.result.scorePercentage}%. Minimum 70% required to elevate competency level.`,
             'warning'
           );
         }
-
-        refreshUserData().catch((syncErr) => console.warn('Background user refresh notice:', syncErr));
       } else {
-        setSubmissionError('Unable to calculate your assessment result. Please try again.');
+        setSubmissionError(res.message || 'Failed to submit assessment.');
       }
     } catch (err: any) {
-      console.error('[QUIZ] Failed to submit quiz:', err);
-      setSubmissionError(err?.message || 'Unable to calculate your assessment result.');
+      console.error('Submission failed:', err);
+      setSubmissionError(err?.message || 'An error occurred while submitting.');
     } finally {
       setIsSubmitting(false);
     }
   };
 
-  if (!isQuizModalOpen) return null;
+  const handleRetake = () => {
+    if (!assessment) return;
+    setQuizResult(null);
+    setCurrentQuestionIndex(0);
+    setSelectedAnswers(new Array(assessment.questions.length).fill(-1));
+    setFlaggedQuestions(new Array(assessment.questions.length).fill(false));
+    setTimeLeftSeconds(assessment.timeLimitMinutes * 60);
+  };
 
-  const currentQ = assessment?.questions[currentQuestionIndex];
   const formatTime = (secs: number) => {
     const mins = Math.floor(secs / 60);
     const remainder = secs % 60;
     return `${mins}:${remainder < 10 ? '0' : ''}${remainder}`;
   };
+
+  if (!isQuizModalOpen) return null;
+
+  const currentQ = assessment?.questions[currentQuestionIndex];
 
   return (
     <AnimatePresence>
@@ -221,6 +255,11 @@ export const QuizModal: React.FC = () => {
                   <span className="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full bg-[#002147] text-white">
                     Diagnostic Exam
                   </span>
+                  {personalizationContext && (
+                    <span className="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full bg-[#fe9832]/20 text-[#fe9832] border border-[#fe9832]/40">
+                      Target: L{personalizationContext.currentLevel} → L{personalizationContext.requiredLevel} ({personalizationContext.difficulty})
+                    </span>
+                  )}
                   <span className="text-[10px] font-semibold text-[#002147]">
                     Domain: {assessment?.competency}
                   </span>

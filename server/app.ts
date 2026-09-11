@@ -14,7 +14,10 @@ import {
   generateAIQuestionsFromContent,
   summarizeDocumentAndGenerateQuestions,
   generateAIMentorResponse,
+  generatePersonalizedCourseQuestions,
+  checkGeminiHealth,
 } from './ai/gemini.js';
+import { extractPdfText, validatePdfBuffer } from './utils/pdf-extractor.js';
 import {
   fetchLearnerProfileCompetencyData,
   recalibrateLearnerGaps,
@@ -25,6 +28,7 @@ import type {
   CompetencyLevel,
   QuizAttemptResult,
   QuizAssessment,
+  QuizQuestion,
   UnifiedRecommendation,
   LearnerCompetency,
   GapAnalysisResult,
@@ -37,6 +41,16 @@ import {
   normalizeDatabaseUrl,
   getPostgresPoolConfig,
 } from './utils/db-url.js';
+import {
+  persistAuditLog,
+  persistAssessmentAttempt,
+  persistAssessmentAnswers,
+  persistLearnerCompetencies,
+  persistSkillGaps,
+  persistLearningPathAndProgress,
+  persistLearningProgress,
+  persistUploadedMaterial,
+} from './utils/db-sync.js';
 
 export { normalizeDatabaseUrl };
 
@@ -195,6 +209,29 @@ export function createExpressApp() {
         }
         appUser = db.state.users[authUser.id];
       }
+
+      // Background ensure user exists in public.users
+      void (async () => {
+        try {
+          const { error: syncErr } = await serverSupabase
+            .from('users')
+            .upsert(
+              {
+                id: appUser.id,
+                email: appUser.email,
+                name: appUser.name,
+                role: appUser.role,
+                status: 'ACTIVE',
+                auth_provider: 'SUPABASE_AUTH',
+                updated_at: new Date().toISOString(),
+              },
+              { onConflict: 'id' }
+            );
+          if (syncErr) console.warn('[Supabase] background public.users sync:', syncErr.message);
+        } catch (e) {
+          console.warn('[Supabase] background public.users sync catch:', e);
+        }
+      })();
 
       tokenVerificationCache.set(token, {
         user: appUser,
@@ -393,13 +430,13 @@ export function createExpressApp() {
       db.state.learnerCompetencies[authUserId] = baseComps.map((c) => ({ ...c }));
       db.state.gapAnalysis[authUserId] = baseGaps.map((g) => ({ ...g }));
 
-      db.state.auditLogs.unshift({
-        id: `log-${Date.now()}`,
-        timestamp: new Date().toISOString(),
-        user: name,
+      persistAuditLog(serverSupabase, {
+        userId: authUserId,
+        userName: name,
         action: 'USER_REGISTERED',
         details: `New ${role} account registered in Supabase Auth (${authUserId}).`,
-      });
+        ipAddress: (req.headers['x-forwarded-for'] as string) || req.socket.remoteAddress || '127.0.0.1',
+      }).catch((e) => console.warn('[Supabase] audit_logs register sync warning:', e));
 
       res.status(201).json({
         success: true,
@@ -439,13 +476,20 @@ export function createExpressApp() {
 
       const matchedUser = await verifySupabaseToken(data.session.access_token);
 
-      db.state.auditLogs.unshift({
-        id: `log-${Date.now()}`,
-        timestamp: new Date().toISOString(),
-        user: matchedUser?.name || loginIdentifier,
+      persistAuditLog(serverSupabase, {
+        userId: data.user.id,
+        userName: matchedUser?.name || loginIdentifier,
         action: 'USER_LOGIN',
         details: 'Officer authenticated successfully via Supabase Auth.',
-      });
+        ipAddress: (req.headers['x-forwarded-for'] as string) || req.socket.remoteAddress || '127.0.0.1',
+      }).catch((e) => console.warn('[Supabase] audit_logs login sync warning:', e));
+
+      Promise.resolve(
+        serverSupabase
+          .from('users')
+          .update({ last_login_at: new Date().toISOString() })
+          .eq('id', data.user.id)
+      ).catch(() => {});
 
       return res.json({
         success: true,
@@ -865,13 +909,21 @@ export function createExpressApp() {
 
     db.state.gapAnalysis[user.id] = newGaps;
 
-    db.state.auditLogs.unshift({
-      id: `log-${Date.now()}`,
-      timestamp: new Date().toISOString(),
-      user: user.name,
-      action: 'PURPOSE_CONFIGURED_AND_GAPS_PREDICTED',
-      details: `Target Purpose set to "${title || purposeId}". Identified ${newGaps.length} domain-specific skill gaps for ${user.name}.`,
-    });
+    try {
+      await persistAuditLog(serverSupabase, {
+        userId: user.id,
+        userName: user.name,
+        action: 'PURPOSE_CONFIGURED_AND_GAPS_PREDICTED',
+        details: `Target Purpose set to "${title || purposeId}". Identified ${newGaps.length} domain-specific skill gaps for ${user.name}.`,
+        ipAddress: (req.headers['x-forwarded-for'] as string) || req.socket.remoteAddress || '127.0.0.1',
+      });
+
+      await persistLearnerCompetencies(serverSupabase, user.id, assignedComps);
+      await persistSkillGaps(serverSupabase, user.id, newGaps);
+    } catch (dbErr: any) {
+      console.error('[Supabase] Purpose persistence failed:', dbErr);
+      return res.status(500).json({ success: false, message: 'Database persistence failed: ' + dbErr.message });
+    }
 
     res.json({
       success: true,
@@ -885,7 +937,18 @@ export function createExpressApp() {
   // ==========================================
   // 3. COMPETENCIES & PASSPORT
   // ==========================================
-  app.get('/api/competencies', (req, res) => {
+  app.get('/api/competencies', async (req, res) => {
+    try {
+      const { data, error } = await serverSupabase
+        .from('competencies')
+        .select('*, competency_framework(id, name, code)')
+        .order('id');
+      if (data && data.length > 0) {
+        return res.json({ success: true, competencies: data });
+      }
+    } catch (e) {
+      console.warn('[Supabase] competencies fetch failed, falling back:', e);
+    }
     res.json({ success: true, competencies: db.state.competencies });
   });
 
@@ -894,7 +957,7 @@ export function createExpressApp() {
     if (!user) {
       return res.status(401).json({ success: false, message: 'Authentication required. Please log in.' });
     }
-    const result = await fetchLearnerProfileCompetencyData(user.id);
+    const result = await fetchLearnerProfileCompetencyData(user.id, serverSupabase);
     res.json({ success: true, competencies: result.competencies, profile: result.profile });
   });
 
@@ -905,7 +968,7 @@ export function createExpressApp() {
       if (!user) {
         return res.status(401).json({ success: false, message: 'Authentication required. Please log in.' });
       }
-      const data = await fetchLearnerProfileCompetencyData(user.id);
+      const data = await fetchLearnerProfileCompetencyData(user.id, serverSupabase);
       res.json(data);
     } catch (err: any) {
       console.error('Failed to fetch learner profile competencies from database:', err);
@@ -922,7 +985,7 @@ export function createExpressApp() {
       if (!user) {
         return res.status(401).json({ success: false, message: 'Authentication required. Please log in.' });
       }
-      const data = await fetchLearnerProfileCompetencyData(user.id);
+      const data = await fetchLearnerProfileCompetencyData(user.id, serverSupabase);
       res.json({
         success: true,
         gaps: data.gaps,
@@ -943,7 +1006,8 @@ export function createExpressApp() {
       if (!user) {
         return res.status(401).json({ success: false, message: 'Authentication required. Please log in.' });
       }
-      const data = await recalibrateLearnerGaps(user.id);
+      const data = await recalibrateLearnerGaps(user.id, serverSupabase);
+
       res.json({
         success: true,
         gaps: data.gaps,
@@ -954,7 +1018,7 @@ export function createExpressApp() {
       });
     } catch (err: any) {
       console.error('Failed to recalibrate learner gaps:', err);
-      res.status(500).json({ success: false, message: 'Failed to recalibrate gaps' });
+      res.status(500).json({ success: false, message: 'Failed to recalibrate gaps: ' + (err?.message || err) });
     }
   });
 
@@ -1025,7 +1089,7 @@ export function createExpressApp() {
   // ==========================================
   // 6. PERSONALIZED LEARNING PATH & PROGRESS
   // ==========================================
-  app.get(['/api/learning-path', '/learning-path'], (req, res) => {
+  app.get(['/api/learning-path', '/learning-path'], async (req, res) => {
     try {
       const user = resolveUser(req);
       if (!user) {
@@ -1035,6 +1099,50 @@ export function createExpressApp() {
       const targetRole = user.targetRole || user.designation || 'Deputy Director (Statistics)';
       let path = db.state.learningPaths[userId];
 
+      // Check PostgreSQL first
+      try {
+        const { data: dbPath } = await serverSupabase
+          .from('learning_paths')
+          .select('*')
+          .eq('user_id', userId)
+          .maybeSingle();
+
+        if (dbPath) {
+          const { data: steps } = await serverSupabase
+            .from('learning_progress')
+            .select('*')
+            .eq('path_id', dbPath.id)
+            .order('step_number', { ascending: true });
+
+          if (steps && steps.length > 0) {
+            path = {
+              id: dbPath.id,
+              userId: dbPath.user_id,
+              title: dbPath.title,
+              targetRole: dbPath.target_role,
+              progressPercentage: dbPath.progress_percentage || 0,
+              items: steps.map((s: any, idx: number) => ({
+                id: s.id.replace(/^step-/, ''),
+                order: s.step_number || idx + 1,
+                title: s.title,
+                source: s.provider || 'iGOT Karmayogi',
+                sourceType: (s.source_type as any) || 'IGOT',
+                duration: s.duration || '2 hours',
+                competency: s.competency_name || 'Statistical Competency',
+                reason: `Recommended for ${dbPath.target_role || 'statistical role'} progression.`,
+                status: (s.status as any) || 'NOT_STARTED',
+                score: s.score !== null ? s.score : undefined,
+              })),
+              createdAt: dbPath.updated_at || new Date().toISOString(),
+              updatedAt: dbPath.updated_at || new Date().toISOString(),
+            };
+            db.state.learningPaths[userId] = path;
+          }
+        }
+      } catch (dbErr) {
+        console.warn('[Supabase] learning_paths lookup error:', dbErr);
+      }
+
       if (!path) {
         let gaps = db.state.gapAnalysis[userId] || [];
         if (gaps.length === 0) {
@@ -1042,6 +1150,13 @@ export function createExpressApp() {
         }
         path = UnifiedCatalogueService.generatePersonalizedPathway(userId, targetRole, gaps);
         db.state.learningPaths[userId] = path;
+
+        // Persist new pathway to PostgreSQL
+        try {
+          await persistLearningPathAndProgress(serverSupabase, userId, path);
+        } catch (pErr) {
+          console.warn('[Supabase] Initial learning path persist error:', pErr);
+        }
       }
 
       res.json({ success: true, learningPath: path });
@@ -1051,58 +1166,151 @@ export function createExpressApp() {
     }
   });
 
-  app.post(['/api/learning-path/step-update', '/learning-path/step-update'], (req, res) => {
-    const user = resolveUser(req);
-    if (!user) {
-      return res.status(401).json({ success: false, message: 'Authentication required. Please log in.' });
-    }
-    const userId = user.id;
-    const { stepId, status, score } = req.body;
-    const path = db.state.learningPaths[userId] || db.state.learningPaths['user-learner-01'];
-    if (path) {
-      const item = path.items.find((i) => i.id === stepId);
-      if (item) {
-        item.status = status;
-        if (score !== undefined) item.score = score;
-
-        // Recalculate progress percentage
-        const completed = path.items.filter((i) => i.status === 'COMPLETED' || i.status === 'VERIFIED').length;
-        path.progressPercentage = Math.round((completed / path.items.length) * 100);
-        path.updatedAt = new Date().toISOString();
-
-        // Enforce critical rule: Course completion NEVER updates competency level directly.
-        // It updates status to 'DEVELOPING' with 'ASSESSMENT_PENDING' until validated assessment is passed.
-        const userComps = db.state.learnerCompetencies[userId] || [];
-        const relatedComp = userComps.find(
-          (c) => item.competency && c.name.toLowerCase().includes(item.competency.toLowerCase())
-        );
-        if (relatedComp && relatedComp.currentLevel < relatedComp.requiredLevel) {
-          relatedComp.status = 'DEVELOPING';
-          relatedComp.evidence = {
-            ...relatedComp.evidence,
-            notes: `Learning in Progress: Completed "${item.title}". Status: Assessment Pending. Validated assessment required for competency level progression.`,
-            courseCompletions: Array.from(new Set([...(relatedComp.evidence.courseCompletions || []), item.title])),
-          };
-        }
-
-        res.json({ success: true, learningPath: path });
-        return;
+  app.post(['/api/learning-path/step-update', '/learning-path/step-update'], async (req, res) => {
+    try {
+      const user = resolveUser(req);
+      if (!user) {
+        return res.status(401).json({ success: false, message: 'Authentication required. Please log in.' });
       }
+      const userId = user.id;
+      const { stepId, status, score } = req.body;
+      const path = db.state.learningPaths[userId] || db.state.learningPaths['user-learner-01'];
+      if (path) {
+        const item = path.items.find((i) => i.id === stepId);
+        if (item) {
+          item.status = status;
+          if (score !== undefined) item.score = score;
+
+          // Recalculate progress percentage
+          const completed = path.items.filter((i) => i.status === 'COMPLETED' || i.status === 'VERIFIED').length;
+          path.progressPercentage = Math.round((completed / path.items.length) * 100);
+          path.updatedAt = new Date().toISOString();
+
+          // Enforce critical rule: Course completion NEVER updates competency level directly.
+          // It updates status to 'DEVELOPING' with 'ASSESSMENT_PENDING' until validated assessment is passed.
+          const userComps = db.state.learnerCompetencies[userId] || [];
+          const relatedComp = userComps.find(
+            (c) => item.competency && c.name.toLowerCase().includes(item.competency.toLowerCase())
+          );
+          if (relatedComp && relatedComp.currentLevel < relatedComp.requiredLevel) {
+            relatedComp.status = 'DEVELOPING';
+            relatedComp.evidence = {
+              ...relatedComp.evidence,
+              notes: `Learning in Progress: Completed "${item.title}". Status: Assessment Pending. Validated assessment required for competency level progression.`,
+              courseCompletions: Array.from(new Set([...(relatedComp.evidence.courseCompletions || []), item.title])),
+            };
+          }
+
+          // Await persistence in PostgreSQL
+          try {
+            await persistLearningProgress(serverSupabase, path.id || `path-${userId}`, userId, {
+              id: item.id,
+              title: item.title,
+              provider: (item as any).provider || item.sourceType || 'iGOT Karmayogi',
+              sourceType: item.sourceType,
+              duration: item.duration,
+              status: item.status,
+              score: item.score,
+              competency: item.competency,
+            });
+
+            await serverSupabase
+              .from('learning_paths')
+              .upsert({
+                id: path.id || `path-${userId}`,
+                user_id: userId,
+                title: path.title || 'Personalized Career Competency Pathway',
+                target_role: path.targetRole || 'Deputy Director',
+                progress_percentage: path.progressPercentage,
+                updated_at: new Date().toISOString(),
+              }, { onConflict: 'id' });
+          } catch (dbErr: any) {
+            console.error('[Supabase] Step update persistence failed:', dbErr);
+            return res.status(500).json({ success: false, message: 'Database persistence failed: ' + dbErr.message });
+          }
+
+          res.json({ success: true, learningPath: path });
+          return;
+        }
+      }
+      res.status(404).json({ success: false, message: 'Step not found' });
+    } catch (err: any) {
+      console.error('Failed to update learning path step:', err);
+      res.status(500).json({ success: false, message: 'Step update error: ' + (err?.message || err) });
     }
-    res.status(404).json({ success: false, message: 'Step not found' });
   });
 
   // ==========================================
   // 7. ASSESSMENTS, QUIZZES & REASSESSMENT LOOP
   // ==========================================
-  app.get(['/api/assessments', '/api/quiz/assessments', '/assessments', '/quiz/assessments'], (req, res) => {
+  app.get(['/api/assessments', '/api/quiz/assessments', '/assessments', '/quiz/assessments'], async (req, res) => {
+    try {
+      const { data, error } = await serverSupabase
+        .from('assessments')
+        .select('*, assessment_questions(*)');
+
+      if (data && data.length > 0) {
+        const mapped = data.map((a: any) => ({
+          id: a.id,
+          title: a.title,
+          description: a.description,
+          competency: a.competency_id,
+          timeLimitMinutes: a.time_limit_minutes,
+          passingScore: a.passing_score,
+          questions: (a.assessment_questions || []).map((q: any) => ({
+            id: q.id,
+            question: q.question_text,
+            options: q.options,
+            correctAnswer: q.correct_answer_index,
+            explanation: q.explanation,
+            topic: q.topic,
+            difficulty: q.difficulty,
+          })),
+        }));
+        return res.json({ success: true, assessments: mapped });
+      }
+    } catch (e) {
+      console.warn('[Supabase] assessments fetch failed, falling back:', e);
+    }
     res.json({ success: true, assessments: db.state.assessments });
   });
 
-  app.get(['/api/assessments/:id', '/assessments/:id'], (req, res) => {
+  app.get(['/api/assessments/:id', '/assessments/:id'], async (req, res) => {
     const rawParam = req.params.id || '';
     const decodedParam = decodeURIComponent(rawParam);
     const query = decodedParam.toLowerCase();
+
+    // Try PostgreSQL first
+    try {
+      const { data, error } = await serverSupabase
+        .from('assessments')
+        .select('*, assessment_questions(*)')
+        .eq('id', query)
+        .maybeSingle();
+
+      if (data) {
+        const mapped = {
+          id: data.id,
+          title: data.title,
+          description: data.description,
+          competency: data.competency_id,
+          timeLimitMinutes: data.time_limit_minutes,
+          passingScore: data.passing_score,
+          questions: (data.assessment_questions || []).map((q: any) => ({
+            id: q.id,
+            question: q.question_text,
+            options: q.options,
+            correctAnswer: q.correct_answer_index,
+            explanation: q.explanation,
+            topic: q.topic,
+            difficulty: q.difficulty,
+          })),
+        };
+        return res.json({ success: true, assessment: mapped });
+      }
+    } catch (e) {
+      console.warn('[Supabase] assessment single lookup error:', e);
+    }
 
     let assessment = db.state.assessments.find((a) => a.id.toLowerCase() === query);
     
@@ -1228,15 +1436,9 @@ export function createExpressApp() {
         db.state.competencyUpgradeAudits[userId] = db.state.competencyUpgradeAudits[userId] || [];
         db.state.competencyUpgradeAudits[userId].unshift(upgradeRecord);
 
-        // Update User profile verified/developing counts & calculated readiness
-        let totalScore = 0;
-        let totalMax = 0;
-        userComps.forEach((c) => {
-          totalScore += Math.min(c.currentLevel, c.requiredLevel);
-          totalMax += c.requiredLevel;
-        });
-        user.roleReadiness = totalMax > 0 ? Math.round((totalScore / totalMax) * 100) : 88;
-        user.verifiedSkillsCount = userComps.filter((c) => c.status === 'VERIFIED' || c.currentLevel >= c.requiredLevel).length;
+        // Recalculate summary metrics on profile
+        user.roleReadiness = Math.min(100, Math.max(user.roleReadiness || 80, user.roleReadiness + 5));
+        user.verifiedSkillsCount = userComps.filter((c) => c.status === 'VERIFIED').length;
         user.developingSkillsCount = userComps.filter((c) => c.status === 'DEVELOPING' || c.status === 'CRITICAL_GAP').length;
 
         // Update Learning Path status
@@ -1278,7 +1480,7 @@ export function createExpressApp() {
 
         // Asynchronously update AI gap diagnoses in the background without blocking the score response
         setImmediate(() => {
-          recalibrateLearnerGaps(userId).catch((err) =>
+          recalibrateLearnerGaps(userId, serverSupabase).catch((err) =>
             console.error('Background gap recalibration error:', err)
           );
         });
@@ -1316,6 +1518,59 @@ export function createExpressApp() {
       completedAt: new Date().toISOString(),
     };
 
+    const attemptId = `attempt-${Date.now()}`;
+
+    // Await PostgreSQL persistence for all attempt data, answers, competencies, and gaps
+    try {
+      await persistAssessmentAttempt(serverSupabase, {
+        id: attemptId,
+        assessmentId: assessment.id,
+        userId: user.id,
+        scorePercentage,
+        totalQuestions: assessment.questions.length,
+        correctAnswersCount: correctCount,
+        incorrectAnswersCount: assessment.questions.length - correctCount,
+        timeSpentSeconds: timeSpentSeconds || 240,
+        passed,
+        topicScores,
+        aiConclusion: result.aiConclusion,
+        updatedCompetencyLevel: updatedLevel,
+        gapReduced,
+        recommendedRevision: result.recommendedRevision,
+        completedAt: result.completedAt,
+      });
+
+      await persistAssessmentAnswers(
+        serverSupabase,
+        attemptId,
+        assessment.id,
+        assessment.questions,
+        answers,
+        timeSpentSeconds || 240
+      );
+
+      await persistAuditLog(serverSupabase, {
+        userId: user.id,
+        userName: user.name,
+        action: passed ? 'COMPETENCY_LEVEL_ELEVATED' : 'ASSESSMENT_ATTEMPTED',
+        details: passed
+          ? `Elevated ${targetComp?.name || assessment.competency} from Level ${previousLevel} to Level ${updatedLevel} based on validated Assessment (${assessment.id}: ${scorePercentage}%).`
+          : `Completed assessment ${assessment.id} with score ${scorePercentage}% (Passing threshold: ${assessment.passingScore}%).`,
+        ipAddress: (req.headers['x-forwarded-for'] as string) || req.socket.remoteAddress || '127.0.0.1',
+      });
+
+      await persistLearnerCompetencies(serverSupabase, user.id, userComps);
+
+      const latestGaps = db.state.gapAnalysis[userId] || [];
+      await persistSkillGaps(serverSupabase, user.id, latestGaps);
+    } catch (dbErr: any) {
+      console.error('[Supabase] Assessment submit persistence failed:', dbErr);
+      return res.status(500).json({
+        success: false,
+        message: 'Database persistence failed: ' + (dbErr?.message || dbErr),
+      });
+    }
+
     res.json({
       success: true,
       result,
@@ -1333,6 +1588,229 @@ export function createExpressApp() {
     }
     const audits = db.state.competencyUpgradeAudits[user.id] || [];
     res.json({ success: true, audits, totalCount: audits.length });
+  });
+
+  // ==========================================
+  // AI HEALTH CHECK (SAFE - NO SECRETS, NO LIVE REMOTE CALL)
+  // ==========================================
+  app.get(['/api/ai/health', '/ai/health'], (_req: Request, res: Response) => {
+    const health = checkGeminiHealth();
+    res.status(health.configured ? 200 : 503).json(health);
+  });
+
+  // ==========================================
+  // PERSONALIZED ASSESSMENT ENGINE
+  // ==========================================
+  app.post(['/api/assessments/personalized', '/assessments/personalized'], async (req: Request, res: Response) => {
+    try {
+      const user = resolveUser(req);
+      if (!user) {
+        return res.status(401).json({ success: false, message: 'Authentication required. Please log in.' });
+      }
+
+      const { courseId, competencyId, difficulty: reqDifficulty, count = 5 } = req.body || {};
+
+      // 1. Fetch learner competencies & skill gaps directly from PostgreSQL
+      const [compsRes, gapsRes] = await Promise.all([
+        serverSupabase
+          .from('learner_competencies')
+          .select('*, competencies(*)')
+          .eq('user_id', user.id),
+        serverSupabase
+          .from('skill_gaps')
+          .select('*')
+          .eq('user_id', user.id),
+      ]);
+
+      const dbComps = compsRes.data || [];
+      const dbGaps = gapsRes.data || [];
+
+      // 2. Identify target course & competency requirements
+      let targetCourse: any = null;
+      let targetCompId = competencyId || 'comp-tech-01';
+      let targetCompName = 'Python Survey Microdata Cleaning';
+      let targetCourseTitle = '';
+      let targetCourseDesc = '';
+      let targetLevel = 3;
+
+      if (courseId) {
+        const { data: cData } = await serverSupabase
+          .from('courses')
+          .select('*, competencies(*)')
+          .eq('id', courseId)
+          .maybeSingle();
+
+        if (cData) {
+          targetCourse = cData;
+          targetCourseTitle = cData.title;
+          targetCourseDesc = cData.description || '';
+          targetCompId = cData.competency_id || targetCompId;
+          targetCompName = cData.competencies?.name || cData.competency || targetCompName;
+          targetLevel = cData.target_level || 3;
+        }
+      } else if (competencyId) {
+        const { data: compData } = await serverSupabase
+          .from('competencies')
+          .select('*')
+          .eq('id', competencyId)
+          .maybeSingle();
+
+        if (compData) {
+          targetCompId = compData.id;
+          targetCompName = compData.name;
+          targetLevel = compData.target_level || 4;
+        }
+      }
+
+      // 3. Read current level and gap from PostgreSQL
+      const learnerComp = dbComps.find(
+        (c: any) =>
+          c.competency_id === targetCompId ||
+          c.competencies?.name?.toLowerCase() === targetCompName.toLowerCase() ||
+          (c.name && c.name.toLowerCase() === targetCompName.toLowerCase())
+      );
+      const currentLevel = learnerComp ? Number(learnerComp.current_level) || 2 : 2;
+
+      const learnerGap = dbGaps.find(
+        (g: any) =>
+          g.competency_id === targetCompId ||
+          g.competency_name?.toLowerCase() === targetCompName.toLowerCase()
+      );
+      const requiredLevel = learnerGap ? Number(learnerGap.required_level) || targetLevel : targetLevel;
+      const gapSize = Math.max(0, requiredLevel - currentLevel);
+
+      // 4. Determine assessment difficulty based on gap and target level
+      let difficulty: 'Easy' | 'Medium' | 'Hard' = 'Medium';
+      if (reqDifficulty && ['Easy', 'Medium', 'Hard'].includes(reqDifficulty)) {
+        difficulty = reqDifficulty as 'Easy' | 'Medium' | 'Hard';
+      } else if (currentLevel <= 2 && requiredLevel <= 2) {
+        difficulty = 'Easy';
+      } else if (currentLevel <= 2 && requiredLevel >= 3) {
+        difficulty = 'Medium';
+      } else if (currentLevel >= 3) {
+        difficulty = 'Hard';
+      }
+
+      // 5. Select / Generate questions
+      // Priority 1: PostgreSQL assessment_questions bank
+      const { data: approvedQRows } = await serverSupabase
+        .from('assessment_questions')
+        .select('*')
+        .or(`competency_id.eq.${targetCompId},topic.ilike.%${targetCompName}%`);
+
+      const finalQuestions: QuizQuestion[] = [];
+      const neededCount = Math.min(10, Math.max(3, Number(count) || 5));
+
+      if (approvedQRows && approvedQRows.length > 0) {
+        for (const row of approvedQRows) {
+          if (finalQuestions.length >= neededCount) break;
+          finalQuestions.push({
+            id: row.id,
+            question: row.question_text,
+            options: row.options,
+            correctAnswer: row.correct_answer_index,
+            explanation: row.explanation || 'Verified approved assessment question.',
+            difficulty: row.difficulty || difficulty,
+            competency: targetCompName,
+            topic: row.topic || targetCompName,
+            sourceReference: 'MoSPI National Question Bank',
+          });
+        }
+      }
+
+      // Priority 2 / 3: Gemini 3.6 Flash personalized question generation if more questions needed
+      if (finalQuestions.length < neededCount) {
+        const aiCount = neededCount - finalQuestions.length;
+        try {
+          const generatedQuestions = await generatePersonalizedCourseQuestions({
+            courseTitle: targetCourseTitle || `${targetCompName} Targeted Evaluation`,
+            courseDescription: targetCourseDesc,
+            competencyName: targetCompName,
+            currentLevel,
+            requiredLevel,
+            gapSize,
+            difficulty,
+            questionCount: Math.max(3, aiCount),
+          });
+
+          for (const gq of generatedQuestions) {
+            if (finalQuestions.length >= neededCount) break;
+            finalQuestions.push(gq);
+          }
+        } catch (aiErr: any) {
+          console.warn('[PersonalizedAssessment] Gemini question generation warning:', aiErr?.message);
+          // If Gemini fails but we have at least 1 question, proceed with available
+          if (finalQuestions.length === 0) {
+            throw new Error(`Failed to generate personalized questions: ${aiErr?.message || aiErr}`);
+          }
+        }
+      }
+
+      const assessmentId = `assess-pers-${Date.now()}`;
+      const newAssessment: QuizAssessment = {
+        id: assessmentId,
+        title: targetCourseTitle ? `${targetCourseTitle} - Targeted Assessment` : `${targetCompName} Diagnostic Assessment`,
+        description: `Personalized evaluation targeting Level ${currentLevel} → Level ${requiredLevel} competency requirements.`,
+        competency: targetCompName,
+        timeLimitMinutes: Math.max(5, finalQuestions.length * 2),
+        passingScore: 70,
+        questions: finalQuestions,
+        isAiGenerated: true,
+      };
+
+      // Ensure assessment exists in PostgreSQL assessments table so submit foreign key constraint passes
+      try {
+        await serverSupabase.from('assessments').upsert({
+          id: assessmentId,
+          title: newAssessment.title,
+          competency_id: targetCompId,
+          description: newAssessment.description,
+          time_limit_minutes: newAssessment.timeLimitMinutes,
+          passing_score: newAssessment.passingScore,
+          is_ai_generated: true,
+          created_at: new Date().toISOString(),
+        });
+
+        // Also ensure questions exist in assessment_questions table
+        const qRows = finalQuestions.map((q, idx) => ({
+          id: q.id,
+          assessment_id: assessmentId,
+          competency_id: targetCompId,
+          question_text: q.question,
+          options: q.options,
+          correct_answer_index: q.correctAnswer,
+          explanation: q.explanation,
+          difficulty: q.difficulty || difficulty,
+          topic: q.topic || targetCompName,
+          order_index: idx + 1,
+        }));
+        await serverSupabase.from('assessment_questions').upsert(qRows, { onConflict: 'id' });
+      } catch (dbErr: any) {
+        console.warn('[Supabase] Assessment persistence warning:', dbErr?.message);
+      }
+
+      // Add to in-memory state as well
+      db.state.assessments.unshift(newAssessment);
+
+      res.json({
+        success: true,
+        assessment: newAssessment,
+        personalization: {
+          courseId: courseId || null,
+          courseTitle: targetCourseTitle || null,
+          competencyId: targetCompId,
+          competencyName: targetCompName,
+          currentLevel,
+          requiredLevel,
+          gapSize,
+          difficulty,
+          totalQuestions: finalQuestions.length,
+        },
+      });
+    } catch (err: any) {
+      console.error('Personalized assessment error:', err);
+      res.status(500).json({ success: false, message: err?.message || 'Failed to generate personalized assessment.' });
+    }
   });
 
   app.post('/api/assessments/generate-fresh', async (req, res) => {
@@ -1431,13 +1909,31 @@ Key Topics:
 
     db.state.assessments.unshift(newAssessment);
 
-    db.state.auditLogs.unshift({
-      id: `log-${Date.now()}`,
-      timestamp: new Date().toISOString(),
-      user: user.name || 'Trainer',
-      action: 'AI_ASSESSMENT_GENERATED',
-      details: `Generated ${generatedQuestions.length} questions from ${fileName} for ${competency}.`,
-    });
+    try {
+      await persistUploadedMaterial(serverSupabase, {
+        id: docId,
+        userId: user.id,
+        fileName: newDoc.fileName,
+        fileSize: newDoc.fileSize,
+        fileType: newDoc.fileType,
+        purpose: newDoc.purpose,
+        status: newDoc.status,
+        extractedTopics: newDoc.extractedTopics,
+        keySummary: newDoc.keySummary,
+        rawTextExcerpt: (fileContent || '').substring(0, 1000),
+        generatedQuestionsCount: newDoc.generatedQuestionsCount,
+      });
+
+      await persistAuditLog(serverSupabase, {
+        userId: user.id,
+        userName: user.name || 'Trainer',
+        action: 'AI_ASSESSMENT_GENERATED',
+        details: `Generated ${generatedQuestions.length} questions from ${fileName} for ${competency}.`,
+        ipAddress: (req.headers['x-forwarded-for'] as string) || req.socket.remoteAddress || '127.0.0.1',
+      });
+    } catch (dbErr: any) {
+      console.warn('[Supabase] Document upload persistence warning:', dbErr);
+    }
 
     res.json({
       success: true,
@@ -1447,49 +1943,85 @@ Key Topics:
     });
   });
 
-  app.post('/api/documents/summarize-and-generate', async (req, res) => {
+  app.post(['/api/documents/summarize-and-generate', '/documents/summarize-and-generate', '/api/ai/pdf-summarize'], async (req, res) => {
     try {
       const user = resolveUser(req);
       if (!user) {
-        return res.status(401).json({ success: false, message: 'Authentication required. Please log in.' });
+        return res.status(401).json({ success: false, error: 'Authentication required. Please log in.' });
       }
 
-      const { fileName, fileContent, competency, difficulty, questionCount } = req.body;
+      const { fileName = 'MoSPI_Document.pdf', fileContent, fileBase64, competency, difficulty, questionCount } = req.body || {};
 
-      if (!fileContent || !fileContent.trim()) {
-        return res.status(400).json({ success: false, message: 'Document content is required for AI processing.' });
+      let extractedText = '';
+      let pageCount = 1;
+
+      if (fileBase64 && typeof fileBase64 === 'string' && fileBase64.trim()) {
+        const cleanBase64 = fileBase64.includes(',') ? fileBase64.split(',')[1] : fileBase64;
+        const pdfBuffer = Buffer.from(cleanBase64, 'base64');
+
+        const validation = validatePdfBuffer(pdfBuffer, fileName);
+        if (!validation.valid) {
+          return res.status(400).json({ success: false, error: validation.error });
+        }
+
+        const extraction = await extractPdfText(pdfBuffer, fileName);
+        if (extraction.isScanned) {
+          return res.status(422).json({
+            success: false,
+            error: 'This PDF appears to be scanned/image-based and does not contain extractable text. OCR is required.',
+          });
+        }
+        extractedText = extraction.text;
+        pageCount = extraction.pageCount;
+      } else if (fileContent && typeof fileContent === 'string' && fileContent.trim()) {
+        extractedText = fileContent.trim();
+      } else {
+        return res.status(400).json({
+          success: false,
+          error: 'PDF file data (base64) or extractable document text is required for AI processing.',
+        });
+      }
+
+      if (!extractedText || extractedText.length < 30) {
+        return res.status(422).json({
+          success: false,
+          error: 'This PDF appears to be scanned/image-based and does not contain extractable text. OCR is required.',
+        });
       }
 
       const result = await summarizeDocumentAndGenerateQuestions({
-        fileName: fileName || 'Uploaded_Document.pdf',
-        content: fileContent,
+        fileName,
+        content: extractedText,
         competency: competency || 'Official Statistics & Survey Methodology',
         difficulty: difficulty || 'Medium',
         questionCount: Number(questionCount) || 5,
+        pageCount,
       });
 
       const docId = `doc-${Date.now()}`;
+      const approxSize = fileBase64 ? Math.round((fileBase64.length * 3) / 4) : Buffer.byteLength(extractedText, 'utf8');
       const newDoc = {
         id: docId,
         fileName: result.fileName,
-        fileSize: Math.max(1024, fileContent.length * 2),
+        fileSize: approxSize,
         fileType: 'application/pdf',
         uploadedBy: user.id,
         uploadedAt: new Date().toISOString(),
         purpose: 'TRAINER_ASSESSMENT_GENERATION' as const,
-        extractedTopics: result.targetCompetencies,
-        keySummary: result.executiveSummary.slice(0, 200) + '...',
+        extractedTopics: result.competenciesCovered,
+        keySummary: result.executiveSummary.slice(0, 300) + '...',
         status: 'PROCESSED' as const,
         generatedQuestionsCount: result.generatedQuestions.length,
       };
 
       db.state.uploadedDocuments.unshift(newDoc);
 
+      const assessmentId = `assess-doc-${Date.now()}`;
       const newAssessment: QuizAssessment = {
-        id: `assess-doc-${Date.now()}`,
-        title: `${competency || 'MoSPI Statistical'} Document Assessment (${result.fileName})`,
+        id: assessmentId,
+        title: `${competency || 'MoSPI Statistical'} Assessment (${result.fileName})`,
         description: `Authoritative assessment dynamically generated from ${result.fileName}.`,
-        competency: competency || 'Official Statistics',
+        competency: competency || result.competenciesCovered[0] || 'Official Statistics',
         timeLimitMinutes: 15,
         passingScore: 70,
         questions: result.generatedQuestions,
@@ -1498,13 +2030,68 @@ Key Topics:
 
       db.state.assessments.unshift(newAssessment);
 
-      db.state.auditLogs.unshift({
-        id: `log-${Date.now()}`,
-        timestamp: new Date().toISOString(),
-        user: user.name || 'Officer',
-        action: 'AI_DOCUMENT_ANALYZED',
-        details: `Summarized ${result.fileName} and created ${result.generatedQuestions.length} assessment questions.`,
-      });
+      // Persist to PostgreSQL tables: uploaded_learning_materials, audit_logs, assessments, assessment_questions
+      try {
+        await persistUploadedMaterial(serverSupabase, {
+          id: docId,
+          userId: user.id,
+          fileName: newDoc.fileName,
+          fileSize: newDoc.fileSize,
+          fileType: newDoc.fileType,
+          purpose: newDoc.purpose,
+          status: newDoc.status,
+          extractedTopics: result.competenciesCovered,
+          keySummary: JSON.stringify({
+            documentTitle: result.documentTitle,
+            executiveSummary: result.executiveSummary,
+            keyConcepts: result.keyConcepts,
+            importantPoints: result.importantPoints,
+            competenciesCovered: result.competenciesCovered,
+            practicalApplications: result.practicalApplications,
+            importantDefinitions: result.importantDefinitions,
+            keyTakeaways: result.keyTakeaways,
+            suggestedRevisionPoints: result.suggestedRevisionPoints,
+            suggestedAssessmentTopics: result.suggestedAssessmentTopics,
+          }),
+          rawTextExcerpt: extractedText.slice(0, 1000),
+          generatedQuestionsCount: newDoc.generatedQuestionsCount,
+        });
+
+        await persistAuditLog(serverSupabase, {
+          userId: user.id,
+          userName: user.name || 'Officer',
+          action: 'AI_DOCUMENT_SUMMARIZED',
+          details: `Summarized ${result.fileName} and created ${result.generatedQuestions.length} assessment questions.`,
+          ipAddress: (req.headers['x-forwarded-for'] as string) || req.socket.remoteAddress || '127.0.0.1',
+        });
+
+        await serverSupabase.from('assessments').upsert({
+          id: assessmentId,
+          title: newAssessment.title,
+          competency_id: 'comp-stat-01',
+          description: newAssessment.description,
+          time_limit_minutes: newAssessment.timeLimitMinutes,
+          passing_score: newAssessment.passingScore,
+          is_ai_generated: true,
+          created_at: new Date().toISOString(),
+        });
+
+        const qRows = result.generatedQuestions.map((q, idx) => ({
+          id: q.id,
+          assessment_id: assessmentId,
+          competency_id: 'comp-stat-01',
+          question_text: q.question,
+          options: q.options,
+          correct_answer_index: q.correctAnswer,
+          explanation: q.explanation,
+          difficulty: q.difficulty || difficulty || 'Medium',
+          topic: q.topic || competency || 'Official Statistics',
+          order_index: idx + 1,
+        }));
+        await serverSupabase.from('assessment_questions').upsert(qRows, { onConflict: 'id' });
+      } catch (dbErr: any) {
+        console.warn('[Supabase] Document persistence warning:', dbErr?.message || dbErr);
+      }
 
       res.json({
         success: true,
@@ -1513,8 +2100,11 @@ Key Topics:
         document: newDoc,
       });
     } catch (err: any) {
-      console.error('Document summarize error:', err);
-      res.status(500).json({ success: false, message: 'Failed to process document and generate questions.' });
+      console.error('[PDF_SUMMARIZE_ERROR]', err?.message || err);
+      res.status(500).json({
+        success: false,
+        error: err?.message || 'Failed to process document and generate questions.',
+      });
     }
   });
 
@@ -1622,17 +2212,68 @@ Key Topics:
           : `Reassessment score (${scorePercentage}%) requires further review of sampling multiplier formulas before full Level 3 certification.`,
       };
 
-      db.state.auditLogs.unshift({
-        id: `log-${Date.now()}`,
-        timestamp: new Date().toISOString(),
-        user: user.name,
-        action: 'POST_LEARNING_REASSESSMENT_PASSED',
-        details: `Passed post-learning verification reassessment with ${scorePercentage}%. Certificate: ${certificateId}.`,
-      });
+      // Await PostgreSQL persistence
+      const reassessmentQuestions = [
+        { id: 'reassess-q1', question_text: 'Multi-stage Stratified Sampling Design and First Stage Units', options: ['A', 'B', 'C', 'D'], correct_answer_index: 1, topic: 'Sample Surveys' },
+        { id: 'reassess-q2', question_text: 'Python Microdata Multiplier Weights Calibration', options: ['A', 'B', 'C', 'D'], correct_answer_index: 2, topic: 'Python Programming' },
+        { id: 'reassess-q3', question_text: 'Non-sampling Error Imputation in PLFS Datasets', options: ['A', 'B', 'C', 'D'], correct_answer_index: 0, topic: 'Data Processing' },
+        { id: 'reassess-q4', question_text: 'Variance Estimation using Jackknife / Bootstrap Replication', options: ['A', 'B', 'C', 'D'], correct_answer_index: 3, topic: 'Sampling Theory' },
+        { id: 'reassess-q5', question_text: 'Statistical Disclosure Control (k-anonymity & l-diversity)', options: ['A', 'B', 'C', 'D'], correct_answer_index: 1, topic: 'Data Governance' },
+      ];
+
+      try {
+        await persistAssessmentAttempt(serverSupabase, {
+          id: result.reassessmentId,
+          assessmentId: 'reassessment-post-learning',
+          userId: user.id,
+          scorePercentage,
+          totalQuestions: 5,
+          correctAnswersCount: correctCount,
+          incorrectAnswersCount: 5 - correctCount,
+          timeSpentSeconds: 180,
+          passed,
+          topicScores: evaluatedCompetencies,
+          aiConclusion: result.aiVerificationSummary,
+          updatedCompetencyLevel: passed ? 3 : undefined,
+          gapReduced: passed,
+          recommendedRevision: passed ? [] : ['Review sampling multiplier formulas'],
+          completedAt: result.completedAt,
+        });
+
+        const numAnswers = Array.isArray(answers)
+          ? answers.map((a: any) => (typeof a === 'number' ? a : (a.selectedOption !== undefined ? a.selectedOption : 1)))
+          : [1, 2, 0, 3, 1];
+
+        await persistAssessmentAnswers(
+          serverSupabase,
+          result.reassessmentId,
+          'reassessment-post-learning',
+          reassessmentQuestions,
+          numAnswers,
+          180
+        );
+
+        await persistAuditLog(serverSupabase, {
+          userId: user.id,
+          userName: user.name,
+          action: passed ? 'POST_LEARNING_REASSESSMENT_PASSED' : 'POST_LEARNING_REASSESSMENT_FAILED',
+          details: `Reassessment completed with ${scorePercentage}%. Passed: ${passed}. Certificate: ${certificateId}.`,
+          ipAddress: (req.headers['x-forwarded-for'] as string) || req.socket.remoteAddress || '127.0.0.1',
+        });
+
+        await persistLearnerCompetencies(serverSupabase, user.id, comps);
+        await persistSkillGaps(serverSupabase, user.id, refreshedGaps);
+      } catch (dbErr: any) {
+        console.error('[Supabase] Reassessment persistence failed:', dbErr);
+        return res.status(500).json({
+          success: false,
+          message: 'Database persistence failed: ' + (dbErr?.message || dbErr),
+        });
+      }
 
       // Asynchronously trigger AI recalibration in the background without blocking the UI
       setImmediate(() => {
-        recalibrateLearnerGaps(user.id).catch((err) =>
+        recalibrateLearnerGaps(user.id, serverSupabase).catch((err) =>
           console.error('Background reassessment gap recalibration error:', err)
         );
       });
@@ -1657,46 +2298,151 @@ Key Topics:
     try {
       const user = resolveUser(req);
       if (!user) {
-        return res.status(401).json({ success: false, message: 'Authentication required. Please log in.' });
+        return res.status(401).json({ success: false, error: 'Authentication required. Please log in.' });
       }
-      const { message, history } = req.body;
-      const userComps = db.state.learnerCompetencies[user.id] || [];
-      const gaps = db.state.gapAnalysis[user.id] || [];
-      const learningPath = db.state.learningPaths[user.id];
-      const docs = db.state.uploadedDocuments || [];
+      const { message, history } = req.body || {};
 
-      const response = await generateAIMentorResponse({
-        userMessage: message || 'Hello',
-        conversationHistory: Array.isArray(history) ? history : undefined,
-        groundingDocuments: docs.slice(0, 3).map(d => ({ fileName: d.fileName, keySummary: d.keySummary })),
-        learnerProfile: user,
+      if (!message || !message.trim()) {
+        return res.status(400).json({ success: false, error: 'Query message is required.' });
+      }
+
+      // Ground in live authoritative PostgreSQL learner data
+      const [
+        profileRes,
+        compsRes,
+        gapsRes,
+        pathRes,
+        progressRes,
+        attemptsRes,
+        materialsRes,
+        recommendationsRes,
+      ] = await Promise.all([
+        serverSupabase.from('official_profiles').select('*, departments(*), roles(*)').eq('user_id', user.id).maybeSingle(),
+        serverSupabase.from('learner_competencies').select('*, competencies(*)').eq('user_id', user.id),
+        serverSupabase.from('skill_gaps').select('*').eq('user_id', user.id),
+        serverSupabase.from('learning_paths').select('*').eq('user_id', user.id).maybeSingle(),
+        serverSupabase.from('learning_progress').select('*').order('step_number', { ascending: true }).limit(10),
+        serverSupabase.from('assessment_attempts').select('*').eq('user_id', user.id).order('completed_at', { ascending: false }).limit(5),
+        serverSupabase.from('uploaded_learning_materials').select('*').order('uploaded_at', { ascending: false }).limit(5),
+        serverSupabase.from('recommendations').select('*, courses(*), training_programmes(*)').eq('user_id', user.id).limit(5),
+      ]);
+
+      const officialProfile = profileRes.data || {};
+      const dept = officialProfile.departments?.name || user.department || 'National Statistical Office (NSO)';
+      const role = officialProfile.roles?.title || user.designation || 'Statistical Officer';
+
+      const userComps = (compsRes.data && compsRes.data.length > 0)
+        ? compsRes.data.map((c: any) => ({
+            id: c.competency_id,
+            name: c.competencies?.name || c.name || 'Competency',
+            currentLevel: c.current_level,
+            requiredLevel: c.required_level,
+            status: c.status,
+            trend: c.trend,
+          }))
+        : (db.state.learnerCompetencies[user.id] || []).map((c: any) => ({
+            name: c.name,
+            currentLevel: c.currentLevel,
+            requiredLevel: c.requiredLevel,
+            status: c.status,
+          }));
+
+      const gaps = (gapsRes.data && gapsRes.data.length > 0)
+        ? gapsRes.data.map((g: any) => ({
+            competencyName: g.competency_name,
+            currentLevel: g.current_level,
+            requiredLevel: g.required_level,
+            gapType: g.gap_type,
+            priority: g.priority,
+            aiDiagnosis: g.ai_diagnosis,
+          }))
+        : (db.state.gapAnalysis[user.id] || []).map((g: any) => ({
+            competencyName: g.competencyName,
+            currentLevel: g.currentLevel,
+            requiredLevel: g.requiredLevel,
+            gapType: g.gapType,
+            priority: g.priority,
+          }));
+
+      const learningPath = pathRes.data || db.state.learningPaths[user.id] || {};
+      const learningProgress = progressRes.data || [];
+      const attempts = attemptsRes.data || [];
+      const materials = materialsRes.data || (db.state.uploadedDocuments || []);
+      const recommendations = recommendationsRes.data || [];
+
+      const nipunContext = {
+        user: {
+          id: user.id,
+          name: user.name,
+          email: user.email,
+          designation: user.designation,
+          cadre: officialProfile.cadre || user.cadre || 'Indian Statistical Service (ISS)',
+          department: dept,
+          ministry: officialProfile.departments?.ministry || user.ministry || 'Ministry of Statistics & Programme Implementation (MoSPI)',
+          payLevel: officialProfile.pay_level || user.level || 11,
+          yearsOfExperience: officialProfile.years_of_experience || 5,
+          roleReadiness: officialProfile.role_readiness_score || user.roleReadiness || 78,
+          verifiedSkillsCount: userComps.filter((c: any) => c.status === 'VERIFIED').length,
+        },
+        role: {
+          currentRole: role,
+          targetRole: user.targetRole || 'Deputy Director (Statistics)',
+        },
         competencies: userComps,
         gaps,
-        learningPath,
+        selectedCourses: (recommendationsRes.data || []).map((r: any) => ({
+          title: r.courses?.title || 'Applied Statistical Analysis',
+          provider: r.courses?.provider || 'iGOT Karmayogi',
+        })),
+        learningProgress: learningProgress.map((p: any) => ({
+          step: p.step_number,
+          title: p.title,
+          status: p.status,
+        })),
+        assessments: attempts.map((a: any) => ({
+          score: a.score_percentage,
+          passed: a.passed,
+          completedAt: a.completed_at,
+        })),
+        materials: materials.map((m: any) => ({
+          fileName: m.file_name || m.fileName,
+          executiveSummary: (m.executive_summary || m.keySummary || '').slice(0, 300),
+        })),
+        recommendations: recommendations.map((r: any) => ({
+          reason: r.reason,
+          priority: r.priority_level || 'HIGH',
+        })),
+      };
+
+      const response = await generateAIMentorResponse({
+        userMessage: message,
+        conversationHistory: Array.isArray(history) ? history : undefined,
+        nipunContext,
       });
 
       res.json({
         success: true,
         reply: response.reply,
         suggestedActions: response.suggestedActions,
+        contextSummary: {
+          user: nipunContext.user.name,
+          role: nipunContext.role.currentRole,
+          competenciesCount: userComps.length,
+          gapsCount: gaps.length,
+        },
         timestamp: new Date().toISOString(),
       });
     } catch (err: any) {
-      console.error('Error in AI Assistant Chat:', err);
-      res.json({
-        success: true,
-        reply: `Namaste. I am your NIPUN Statistical Capacity Building Assistant. Based on your official profile, your highest priority is mastering **Python for Official Statistics & Survey Microdata**. You can take a diagnostic quiz or open the Survey Practice Lab.`,
-        suggestedActions: [
-          { label: 'Start Python Diagnostic Quiz', actionType: 'START_QUIZ', payload: { competency: 'Python' } },
-          { label: 'Launch Survey Simulation Lab', actionType: 'LAUNCH_LAB' },
-          { label: 'View Unified Recommendations', actionType: 'VIEW_RECOMMENDATIONS' },
-        ],
-        timestamp: new Date().toISOString(),
+      console.error('[AI_ASSISTANT_ERROR]', err?.message || err);
+      res.status(503).json({
+        success: false,
+        error: 'AI service temporarily unavailable',
+        message: 'Gemini AI service is currently unavailable. Please try again later.',
       });
     }
   };
 
-  app.post(['/api/assistant/chat', '/api/assistant', '/api/mentor/chat'], handleAssistantChat);
+  app.post(['/api/ai/assistant', '/api/assistant/chat', '/api/assistant', '/api/mentor/chat'], handleAssistantChat);
 
   app.post(['/api/gap-analysis/ai-diagnosis', '/gap-analysis/ai-diagnosis'], async (req: Request, res: Response) => {
     try {
@@ -1723,23 +2469,11 @@ Key Topics:
         targetDate: '2026-10-31',
       });
     } catch (err: any) {
-      const comp = req.body?.competencyName || 'Python';
-      const curL = Number(req.body?.currentLevel) || 2;
-      const reqL = Number(req.body?.requiredLevel) || 4;
-      res.json({
-        success: true,
-        competencyName: comp,
-        currentLevel: curL,
-        requiredLevel: reqL,
-        gap: Math.max(0, reqL - curL),
-        aiDiagnosis: `Official Gap Assessment for ${comp}: Current Level ${curL} vs Required Target Level ${reqL}. Focus on survey microdata cleaning and weighted aggregations.`,
-        whyRecommended: [
-          'Critical competency for MoSPI data processing workflow',
-          'Direct alignment with ISS Cadre Competency Framework Level 4 requirement',
-        ],
-        confidence: 0.92,
-        priorityRank: 1,
-        targetDate: '2026-10-31',
+      console.error('[AI_GAP_DIAGNOSIS_ERROR]', err?.message || err);
+      res.status(503).json({
+        success: false,
+        error: 'AI service temporarily unavailable',
+        message: 'Gemini AI service is currently unavailable for gap diagnosis.',
       });
     }
   });

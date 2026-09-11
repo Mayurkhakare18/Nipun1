@@ -292,6 +292,7 @@ export interface QuizAttemptResult {
   correctAnswersCount: number;
   incorrectAnswersCount: number;
   timeSpentSeconds: number;
+  passed?: boolean;
   topicScores: { topic: string; score: number; total: number }[];
   aiConclusion: string;
   updatedCompetencyLevel: CompetencyLevel;

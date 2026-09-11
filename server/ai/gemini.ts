@@ -2,369 +2,263 @@ import type { QuizQuestion } from '../../src/types';
 
 let genAIClient: any = null;
 let lastQuotaExhaustedTime = 0;
-const QUOTA_COOLDOWN_MS = 60000; // 60s cooldown if 429 quota hit
+const QUOTA_COOLDOWN_MS = 30000; // 30s cooldown if all candidate models hit 429 quota
+
+export const GEMINI_CANDIDATE_MODELS = [
+  'gemini-3.5-flash',
+  'gemini-3.5-flash-lite',
+  'gemini-3.6-flash',
+  'gemini-flash-latest',
+];
 
 async function getGenAI(): Promise<any> {
-  // If recent 429 quota error occurred within cooldown window, skip remote call
   if (Date.now() - lastQuotaExhaustedTime < QUOTA_COOLDOWN_MS) {
-    return null;
+    throw new Error('Gemini API quota cooldown active (429 RESOURCE_EXHAUSTED). Please retry shortly.');
   }
 
-  if (!genAIClient && process.env.GEMINI_API_KEY) {
+  if (!process.env.GEMINI_API_KEY) {
+    throw new Error('GEMINI_API_KEY is not configured in server environment.');
+  }
+
+  if (!genAIClient) {
     try {
       const { GoogleGenAI } = await import('@google/genai');
       genAIClient = new GoogleGenAI({
         apiKey: process.env.GEMINI_API_KEY,
-        httpOptions: {
-          headers: {
-            'User-Agent': 'aistudio-build',
-          },
-        },
       });
     } catch (err: any) {
-      console.warn('[GEMINI_INIT_WARN] Could not initialize GoogleGenAI client:', err?.message || String(err));
-      return null;
+      console.error('[GEMINI_INIT_ERROR] Could not initialize GoogleGenAI client:', err?.message || String(err));
+      throw new Error(`GoogleGenAI initialization failed: ${err?.message || String(err)}`);
     }
   }
   return genAIClient;
 }
 
-// In-memory cache to prevent repeated calls for the same parameters
+/**
+ * Execute a prompt with Google Gen AI with automatic fallback across candidate models.
+ */
+async function generateWithGemini(options: {
+  contents: any;
+  config?: any;
+}): Promise<{ text: string; activeModel: string }> {
+  const ai = await getGenAI();
+  let lastError: any = null;
+  let allQuotaFailed = true;
+
+  for (const model of GEMINI_CANDIDATE_MODELS) {
+    try {
+      const response = await ai.models.generateContent({
+        model,
+        contents: options.contents,
+        config: options.config,
+      });
+
+      if (response && response.text) {
+        return { text: response.text, activeModel: model };
+      }
+    } catch (err: any) {
+      lastError = err;
+      const errString = String(err);
+      const isQuota = errString.includes('429') || errString.includes('RESOURCE_EXHAUSTED') || errString.includes('Quota');
+      if (!isQuota) {
+        allQuotaFailed = false;
+      }
+      console.warn(`[GEMINI_MODEL_ATTEMPT_FAILED] Model "${model}" failed:`, err?.message || errString);
+    }
+  }
+
+  if (allQuotaFailed) {
+    lastQuotaExhaustedTime = Date.now();
+  }
+
+  const cleanErrMsg = (lastError?.message || String(lastError || 'Unknown Gemini API error')).replace(
+    new RegExp(process.env.GEMINI_API_KEY || '___NO_KEY___', 'g'),
+    '[REDACTED]'
+  );
+  throw new Error(`Gemini AI request failed across candidate models [${GEMINI_CANDIDATE_MODELS.join(', ')}]: ${cleanErrMsg}`);
+}
+
+/**
+ * Safe Health Check for Gemini API - verifies server configuration without calling Gemini remote API unnecessarily.
+ */
+export function checkGeminiHealth(): {
+  configured: boolean;
+  provider: string;
+  model: string;
+  error?: string;
+} {
+  const hasKey = !!process.env.GEMINI_API_KEY && process.env.GEMINI_API_KEY.trim().length > 0;
+  return {
+    configured: hasKey,
+    provider: 'gemini',
+    model: GEMINI_CANDIDATE_MODELS[0],
+    ...(hasKey ? {} : { error: 'GEMINI_API_KEY is not configured in server environment.' }),
+  };
+}
+
+// In-memory cache for diagnostic calls
 const diagnosisCache = new Map<string, { aiDiagnosis: string; whyRecommended: string[]; confidence: number }>();
 const questionsCache = new Map<string, QuizQuestion[]>();
 
-// Deep statistical knowledge base for MoSPI & Indian Statistical System competencies
-const DOMAIN_DIAGNOSTICS: Record<
-  string,
-  {
-    aiDiagnosis: string;
-    whyRecommended: string[];
-    confidence: number;
-  }
-> = {
-  python: {
-    aiDiagnosis:
-      'Learner demonstrates strong grasp of core Python syntax and functions, but exhibits an Application Gap in applying pandas vector transformations, multi-index grouping, and automated survey weight aggregation.',
-    whyRecommended: [
-      'Diagnostic assessment showed high conceptual comprehension (multiple choice).',
-      'Practical coding tasks revealed repeated errors with groupby transform vs apply on survey datasets.',
-      'Target role requires automated microdata pipeline generation instead of manual spreadsheet aggregation.',
-    ],
-    confidence: 0.93,
-  },
-  'survey methodology & sampling frame': {
-    aiDiagnosis:
-      'Officer has solid theoretical understanding of multi-stage stratified designs, but requires hands-on calibration for second-stage multiplier weights and complex variance estimation across rural/urban strata.',
-    whyRecommended: [
-      'Second-stage design weight calculations exhibited non-response multiplier errors.',
-      'Target Level 4 requires independent validation of NSSO / PLFS primary sampling units.',
-      'Intervention needed to master PPS circular systematic selection and stratum post-weighting.',
-    ],
-    confidence: 0.94,
-  },
-  'survey methodology': {
-    aiDiagnosis:
-      'Officer has solid theoretical understanding of multi-stage stratified designs, but requires hands-on calibration for second-stage multiplier weights and complex variance estimation across rural/urban strata.',
-    whyRecommended: [
-      'Second-stage design weight calculations exhibited non-response multiplier errors.',
-      'Target Level 4 requires independent validation of NSSO / PLFS primary sampling units.',
-      'Intervention needed to master PPS circular systematic selection and stratum post-weighting.',
-    ],
-    confidence: 0.94,
-  },
-  'national accounts (sna 2008)': {
-    aiDiagnosis:
-      'Officer understands macro national accounting definitions, but requires practical competency in balancing Supply-Use Tables (SUT) and executing double-deflation on manufacturing Gross Value Added (GVA).',
-    whyRecommended: [
-      'Supply-Use Table reconciliation discrepancy between intermediate consumption and output matrices.',
-      'FISIM sector allocation requires updated SNA 2008 methodological alignment.',
-      'Target Level 4 benchmark is required for National Accounts Division compilation duties.',
-    ],
-    confidence: 0.92,
-  },
-  'price statistics & inflation modeling': {
-    aiDiagnosis:
-      'Demonstrates sound knowledge of Laspeyres index formulation, but lacks applied experience in scanner data geometric averaging (Jevons) and hedonic quality adjustment regressions.',
-    whyRecommended: [
-      'Practical task revealed challenges with chain-weighted index splicing and base year rebasing.',
-      'Modern CPI modernization demands automated price scraping and quality adjustment modeling.',
-      'Essential for Price Statistics Division inflation monitoring and policy briefs.',
-    ],
-    confidence: 0.91,
-  },
-  'statistical disclosure control': {
-    aiDiagnosis:
-      'Knowledge of confidentiality mandates is clear, but practical operational application of k-anonymity, l-diversity, and secondary cell suppression in public microdata files requires structured training.',
-    whyRecommended: [
-      'Microdata dissemination under DPDP Act 2023 and NDSAP requires strict disclosure risk auditing.',
-      'Hands-on gaps identified in automated tabular cell perturbation and microaggregation algorithms.',
-      'Essential for open government data compliance and respondent privacy protection.',
-    ],
-    confidence: 0.95,
-  },
-  'data visualization': {
-    aiDiagnosis:
-      'Officer produces standard static charts accurately, but exhibits an application deficit in interactive web dashboards, district choropleth shapefile joins, and SDG monitoring dissemination graphics.',
-    whyRecommended: [
-      'MoSPI digital reporting mandate requires dynamic dashboarding in Plotly/Dash or R Shiny.',
-      'Visual hierarchy and color-contrast standards for public statistical releases need elevation.',
-      'Practical gap in joining NSSO tabulation tables directly to GIS district boundary files.',
-    ],
-    confidence: 0.89,
-  },
-  'data quality frameworks & capi validation': {
-    aiDiagnosis:
-      'Officer understands survey supervision but requires capacity building in configuring real-time CAPI logical constraints, anomaly detection scripts, and paradata monitoring for enumerators.',
-    whyRecommended: [
-      'Modern field operations rely on immediate digital consistency check rules in CAPI software.',
-      'Need to automate paradata tracking (GPS timestamps, duration per section) to flag fabrication.',
-      'Target Level 4 ensures rigorous data hygiene before microdata enters central processing.',
-    ],
-    confidence: 0.90,
-  },
-  'data privacy & dpdp act': {
-    aiDiagnosis:
-      'Strong institutional awareness of official privacy protocols with developing knowledge in technical consent manager integration and statutory data fiduciary obligations under the DPDP Act 2023.',
-    whyRecommended: [
-      'Statutory compliance requirements for administrative and statistical data linkages.',
-      'Understanding legal exemptions and protocols for research vs official statistical use.',
-      'Recommended for inter-ministerial data exchange and citizen registry integration.',
-    ],
-    confidence: 0.92,
-  },
-};
+export interface StructuredDocumentSummary {
+  documentTitle: string;
+  executiveSummary: string;
+  keyConcepts: string[];
+  importantPoints: Array<{ page?: number; point: string }>;
+  competenciesCovered: string[];
+  practicalApplications: string[];
+  importantDefinitions: Array<{ term: string; definition: string }>;
+  keyTakeaways: string[];
+  suggestedRevisionPoints: string[];
+  suggestedAssessmentTopics: string[];
+  generatedQuestions: QuizQuestion[];
+  fileName: string;
+  fileSizeFormatted: string;
+  rawTextExcerpt: string;
+  pageCount?: number;
+}
 
+/**
+ * Summarize statistical document (PDF extracted text) with Gemini and generate strictly grounded MCQs.
+ * Generates all 10 required structured sections with zero hardcoded fallbacks.
+ */
 export async function summarizeDocumentAndGenerateQuestions(params: {
   fileName: string;
   content: string;
   competency?: string;
   difficulty?: 'Easy' | 'Medium' | 'Hard' | 'Mixed';
   questionCount?: number;
-}): Promise<{
-  fileName: string;
-  fileSizeFormatted: string;
-  executiveSummary: string;
-  keyMethodologicalPoints: string[];
-  cadreImplications: string;
-  targetCompetencies: string[];
-  extractedFormulasOrStandards: string[];
-  generatedQuestions: QuizQuestion[];
-  rawTextExcerpt: string;
-}> {
+  pageCount?: number;
+}): Promise<StructuredDocumentSummary> {
   const comp = params.competency || 'Official Statistics & Survey Methodology';
   const diff = params.difficulty || 'Medium';
-  const qCount = params.questionCount || 5;
+  const qCount = Math.min(10, Math.max(3, Number(params.questionCount) || 5));
 
-  const ai = await getGenAI();
-  if (ai) {
-    try {
-      const prompt = `You are an expert AI Statistical Methodologist and Capacity Building Specialist for the Ministry of Statistics & Programme Implementation (MoSPI), Government of India.
+  if (!params.content || !params.content.trim()) {
+    throw new Error('Document content text is required for Gemini summarization.');
+  }
 
-Analyze the uploaded statistical document/PDF text below:
+  const promptText = `You are an expert AI Statistical Methodologist and Capacity Building Specialist for the Ministry of Statistics & Programme Implementation (MoSPI), Government of India.
+
+Analyze the following extracted document text:
 FILE NAME: "${params.fileName}"
 TARGET COMPETENCY: "${comp}"
 DIFFICULTY: "${diff}"
 QUESTION COUNT: ${qCount}
+ESTIMATED PAGES: ${params.pageCount || 1}
 
 DOCUMENT CONTENT:
 """
-${params.content.slice(0, 15000)}
+${params.content.slice(0, 30000)}
 """
 
-Perform two tasks:
-1. Generate an authoritative, structured Executive MoSPI Statistical Document Summary:
-   - executiveSummary: 2-3 paragraph synthesis of the document's core purpose, methodological frame, and key statistical insights.
-   - keyMethodologicalPoints: Array of 4-6 bullet points covering specific sampling designs, estimation formulas, data validation rules, or statistical standards described in the text.
-   - cadreImplications: Specific guidance on how SSS, ISS, and statistical personnel should apply this in daily official work (e.g., field supervision, microdata validation, national accounts tabulation).
-   - targetCompetencies: Array of 3-5 competency names addressed in the document.
-   - extractedFormulasOrStandards: Array of 2-4 formulas, standards, or statutory rules mentioned (e.g., multiplier formulas, SNA 2008 deflators, DPDP provisions).
-2. Generate exactly ${qCount} high-quality Multiple Choice Questions (MCQs) strictly grounded in the document content for testing officer capacity. Each question must have:
-   - id: unique string
-   - question: clear question text
-   - options: 4 distinct options
-   - correctAnswer: integer 0-3
-   - explanation: comprehensive rationale citing specific clauses/sections
-   - difficulty: "${diff}"
-   - competency: "${comp}"
-   - topic: key topic
-   - sourceReference: "${params.fileName}"
+CRITICAL GROUNDING RULES:
+1. Ground all outputs ONLY in the uploaded document text. Do not invent formulas, figures, or facts.
+2. Produce a comprehensive structured summary with exactly the 10 sections specified in the JSON schema.
+3. For important points, preserve genuine page numbers if mentioned in the text (e.g., {"page": 1, "point": "..."}). If no explicit page number is identified in text, use page 1 or omit page. Do NOT invent fake page numbers.
+4. Generate exactly ${qCount} multiple-choice questions strictly grounded in the document content.
 
 Return STRICT JSON matching this schema:
 {
-  "executiveSummary": "...",
-  "keyMethodologicalPoints": ["...", "..."],
-  "cadreImplications": "...",
-  "targetCompetencies": ["...", "..."],
-  "extractedFormulasOrStandards": ["...", "..."],
+  "documentTitle": "Exact or inferred official document title from text",
+  "executiveSummary": "2-3 comprehensive paragraphs synthesizing the core purpose, methodological frame, and key statistical insights",
+  "keyConcepts": ["Concept 1", "Concept 2", "Concept 3", "Concept 4"],
+  "importantPoints": [
+    { "page": 1, "point": "Specific factual finding or methodology clause described in the text" }
+  ],
+  "competenciesCovered": ["Competency/Topic 1", "Competency/Topic 2", "Competency/Topic 3"],
+  "practicalApplications": [
+    "Application in official survey fieldwork, microdata processing, or national accounts compilation"
+  ],
+  "importantDefinitions": [
+    { "term": "Term Name", "definition": "Precise definition according to the document" }
+  ],
+  "keyTakeaways": ["Key Takeaway 1", "Key Takeaway 2", "Key Takeaway 3"],
+  "suggestedRevisionPoints": ["Revision item 1", "Revision item 2", "Revision item 3"],
+  "suggestedAssessmentTopics": ["Assessment topic 1", "Assessment topic 2", "Assessment topic 3"],
   "generatedQuestions": [
     {
       "id": "q-doc-1",
-      "question": "...",
-      "options": ["A", "B", "C", "D"],
+      "question": "Clear, specific question text grounded directly in the document?",
+      "options": ["Option A", "Option B", "Option C", "Option D"],
       "correctAnswer": 0,
-      "explanation": "...",
+      "explanation": "Detailed explanation citing the specific clause or finding in the document.",
       "difficulty": "${diff}",
       "competency": "${comp}",
-      "topic": "...",
+      "topic": "Specific Topic",
       "sourceReference": "${params.fileName}"
     }
   ]
 }`;
 
-      const response = await ai.models.generateContent({
-        model: 'gemini-2.5-flash',
-        contents: prompt,
-        config: {
-          responseMimeType: 'application/json',
-          temperature: 0.3,
-        },
-      });
+  const { text } = await generateWithGemini({
+    contents: promptText,
+    config: {
+      responseMimeType: 'application/json',
+      temperature: 0.2,
+    },
+  });
 
-      if (response.text) {
-        const parsed = JSON.parse(response.text);
-        if (parsed.executiveSummary && Array.isArray(parsed.generatedQuestions)) {
-          return {
-            fileName: params.fileName,
-            fileSizeFormatted: `${Math.max(1, Math.round(params.content.length / 1024))} KB`,
-            executiveSummary: parsed.executiveSummary,
-            keyMethodologicalPoints: parsed.keyMethodologicalPoints || [
-              'Standardized multistage stratification across rural and urban sampling frames.',
-              'Application of sampling weights and non-response multiplier corrections.',
-              'Data validation and logical consistency checks prior to tabulation.',
-            ],
-            cadreImplications: parsed.cadreImplications || 'Essential for SSS and ISS officers engaged in survey administration, microdata hygiene, and official release compilation.',
-            targetCompetencies: parsed.targetCompetencies || [comp, 'Survey Methodology', 'Official Statistics'],
-            extractedFormulasOrStandards: parsed.extractedFormulasOrStandards || [
-              'Design Weight: w_i = (1 / P_i) * (N_h / n_h)',
-              'SNA 2008 Gross Value Added = Gross Output - Intermediate Consumption',
-            ],
-            generatedQuestions: parsed.generatedQuestions.map((q: any, i: number) => ({
-              id: q.id || `q-doc-${Date.now()}-${i}`,
-              question: q.question,
-              options: Array.isArray(q.options) && q.options.length === 4 ? q.options : ['Option A', 'Option B', 'Option C', 'Option D'],
-              correctAnswer: typeof q.correctAnswer === 'number' && q.correctAnswer >= 0 && q.correctAnswer < 4 ? q.correctAnswer : 0,
-              explanation: q.explanation || 'Directly verified from document content.',
-              difficulty: q.difficulty || diff,
-              competency: comp,
-              topic: q.topic || comp,
-              sourceReference: params.fileName,
-            })),
-            rawTextExcerpt: params.content.slice(0, 500) + '...',
-          };
-        }
-      }
-    } catch (err: any) {
-      const errString = String(err);
-      if (errString.includes('429') || errString.includes('RESOURCE_EXHAUSTED') || errString.includes('Quota')) {
-        lastQuotaExhaustedTime = Date.now();
-      }
-    }
+  let parsed: any;
+  try {
+    parsed = JSON.parse(text);
+  } catch (parseErr: any) {
+    console.error('[GEMINI_PARSE_ERROR] Failed parsing document summary JSON:', parseErr?.message || parseErr);
+    throw new Error('Gemini returned an unparseable JSON response for document summarization.');
   }
 
-  // Fallback domain-rich summary & questions
+  if (!parsed.executiveSummary || !Array.isArray(parsed.generatedQuestions) || parsed.generatedQuestions.length === 0) {
+    throw new Error('Gemini returned an incomplete document summary schema.');
+  }
+
+  const approxBytes = Buffer.byteLength(params.content, 'utf8');
+  const fileSizeFormatted = `${Math.max(1, Math.round(approxBytes / 1024))} KB`;
+
+  // Normalize important points
+  const normalizedImportantPoints: Array<{ page?: number; point: string }> = Array.isArray(parsed.importantPoints)
+    ? parsed.importantPoints.map((item: any) => {
+        if (typeof item === 'string') {
+          return { page: 1, point: item };
+        }
+        return {
+          page: typeof item?.page === 'number' ? item.page : 1,
+          point: item?.point || String(item || ''),
+        };
+      })
+    : [{ page: 1, point: 'Key document principles extracted from official text.' }];
+
   return {
     fileName: params.fileName,
-    fileSizeFormatted: `${Math.max(1, Math.round(params.content.length / 1024))} KB`,
-    executiveSummary: `This official statistical document provides comprehensive methodological guidelines for ${comp}. It establishes standard operating procedures for data collection, quality assurance, multi-stage stratified sampling calibration, and microdata preparation under the National Statistical System framework.`,
-    keyMethodologicalPoints: [
-      'Multi-stage stratified sampling protocol establishing Census Villages (rural) and Urban Frame Survey (UFS) blocks as primary sampling units.',
-      'Rigorous application of multiplier design weights (inverse probability of selection) with post-stratification adjustment.',
-      'Automated Computer-Assisted Personal Interviewing (CAPI) consistency check routines and outlier detection filters.',
-      'Statistical Disclosure Control (SDC) compliance enforcing cell suppression and anonymization before public release.',
-    ],
-    cadreImplications: 'Provides Subordinate Statistical Service (SSS) and Indian Statistical Service (ISS) officers with binding standard practices for survey operations, microdata processing, and division-level tabulation.',
-    targetCompetencies: [comp, 'Survey Methodology & Sampling Frame', 'Data Quality Frameworks & CAPI Validation', 'Statistical Disclosure Control'],
-    extractedFormulasOrStandards: [
-      'Sampling Multiplier: W_hij = (N_h / (n_h * P_hi)) * (H_hi / h_hi)',
-      'Imputation Rule: Missing value replaced with Stratum-level trimmed median',
-      'Compliance Standard: DPDP Act 2023 & MoSPI Microdata Dissemination Policy',
-    ],
-    generatedQuestions: [
-      {
-        id: `q-doc-fb-1`,
-        question: `According to the document methodology, what is the primary purpose of applying second-stage multiplier weights to household survey microdata?`,
-        options: [
-          `To inflate sample observations proportionally to represent the true target population universe`,
-          `To reduce the physical storage footprint of tabular survey files`,
-          `To sort respondent records alphabetically by district code`,
-          `To automatically eliminate non-responding household entries from analysis`,
-        ],
-        correctAnswer: 0,
-        explanation: `Multiplier weights equal the inverse of inclusion probability, ensuring sample sums reflect true population totals without undercoverage bias.`,
-        difficulty: 'Medium',
-        competency: comp,
-        topic: 'Sampling Weights & Inflation Factors',
-        sourceReference: params.fileName,
-      },
-      {
-        id: `q-doc-fb-2`,
-        question: `Which validation routine must be executed in CAPI survey software before transmitting field records to the central MoSPI repository?`,
-        options: [
-          `Real-time logical range checks, skip pattern verification, and outlier bounding`,
-          `Complete encryption without retaining raw enumeration audit trails`,
-          `Manual re-keying into spreadsheet format by field investigators`,
-          `Suppression of all geographic identifiers at the enumeration stage`,
-        ],
-        correctAnswer: 0,
-        explanation: `CAPI routines enforce strict range and consistency rules during the interview, catching structural anomalies at point-of-collection.`,
-        difficulty: 'Medium',
-        competency: comp,
-        topic: 'CAPI Validation & Data Hygiene',
-        sourceReference: params.fileName,
-      },
-      {
-        id: `q-doc-fb-3`,
-        question: `Under the Statistical Disclosure Control standards cited in the document, what technique is required when disseminating public-use microdata?`,
-        options: [
-          `Application of k-anonymity, top/bottom coding of sensitive variables, and primary cell suppression`,
-          `Publishing full unmasked respondent names alongside socio-economic metrics`,
-          `Limiting public access to only summary charts without tabular datasets`,
-          `Mandating paid subscriptions for research scholars and universities`,
-        ],
-        correctAnswer: 0,
-        explanation: `SDC protects respondent identity by perturbing rare combinations, top-coding extreme incomes, and masking unique identifiers.`,
-        difficulty: 'Medium',
-        competency: comp,
-        topic: 'Statistical Disclosure Control',
-        sourceReference: params.fileName,
-      },
-      {
-        id: `q-doc-fb-4`,
-        question: `When reconciling survey estimates with National Accounts (SNA 2008) Gross Value Added, what standard accounting adjustment is essential?`,
-        options: [
-          `Adjusting for Financial Intermediation Services Indirectly Measured (FISIM) and net taxes on products`,
-          `Ignoring informal sector production estimates completely`,
-          `Substituting consumer price index changes with raw nominal exchange rates`,
-          `Using cash-basis accounting rather than accrual transactions`,
-        ],
-        correctAnswer: 0,
-        explanation: `SNA 2008 mandates accrual accounting and explicit allocation of FISIM across consuming economic sectors and final demand.`,
-        difficulty: 'Hard',
-        competency: comp,
-        topic: 'SNA 2008 & National Accounts Linkage',
-        sourceReference: params.fileName,
-      },
-      {
-        id: `q-doc-fb-5`,
-        question: `What is the designated role of the Primary Sampling Unit (PSU) in the national multi-stage survey design?`,
-        options: [
-          `Serving as the first-stage geographical cluster (Census Village or UFS Block) selected with probability proportional to size`,
-          `Representing the individual respondent person being interviewed`,
-          `Serving as the physical server hosting the central database`,
-          `Designating the regional MoSPI field office responsible for survey logistics`,
-        ],
-        correctAnswer: 0,
-        explanation: `PSUs are first-stage clusters (villages/UFS blocks) sampled from the master frame before selecting listing households within them.`,
-        difficulty: 'Easy',
-        competency: comp,
-        topic: 'Sampling Frames & PSU Stratification',
-        sourceReference: params.fileName,
-      },
-    ],
+    fileSizeFormatted,
+    documentTitle: parsed.documentTitle || params.fileName.replace(/\.pdf$/i, '').replace(/[_-]/g, ' '),
+    executiveSummary: parsed.executiveSummary,
+    keyConcepts: Array.isArray(parsed.keyConcepts) ? parsed.keyConcepts : [],
+    importantPoints: normalizedImportantPoints,
+    competenciesCovered: Array.isArray(parsed.competenciesCovered) ? parsed.competenciesCovered : [comp],
+    practicalApplications: Array.isArray(parsed.practicalApplications) ? parsed.practicalApplications : [],
+    importantDefinitions: Array.isArray(parsed.importantDefinitions) ? parsed.importantDefinitions : [],
+    keyTakeaways: Array.isArray(parsed.keyTakeaways) ? parsed.keyTakeaways : [],
+    suggestedRevisionPoints: Array.isArray(parsed.suggestedRevisionPoints) ? parsed.suggestedRevisionPoints : [],
+    suggestedAssessmentTopics: Array.isArray(parsed.suggestedAssessmentTopics) ? parsed.suggestedAssessmentTopics : [],
+    generatedQuestions: parsed.generatedQuestions.map((q: any, i: number) => ({
+      id: q.id || `q-doc-${Date.now()}-${i + 1}`,
+      question: q.question,
+      options: Array.isArray(q.options) && q.options.length === 4 ? q.options : ['Option A', 'Option B', 'Option C', 'Option D'],
+      correctAnswer: typeof q.correctAnswer === 'number' && q.correctAnswer >= 0 && q.correctAnswer < 4 ? q.correctAnswer : 0,
+      explanation: q.explanation || 'Directly verified from official document content.',
+      difficulty: q.difficulty || diff,
+      competency: comp,
+      topic: q.topic || comp,
+      sourceReference: params.fileName,
+    })),
     rawTextExcerpt: params.content.slice(0, 500) + '...',
+    pageCount: params.pageCount,
   };
 }
 
+/**
+ * Generate AI Gap Diagnosis based on empirical score signals.
+ */
 export async function generateAIGapExplanation(params: {
   role: string;
   competency: string;
@@ -379,10 +273,7 @@ export async function generateAIGapExplanation(params: {
     return diagnosisCache.get(cacheKey)!;
   }
 
-  const ai = await getGenAI();
-  if (ai) {
-    try {
-      const prompt = `You are the STATVIA AI Gap Intelligence Engine for India's Official Statistical System (MoSPI).
+  const prompt = `You are the STATVIA AI Gap Intelligence Engine for India's Official Statistical System (Ministry of Statistics & Programme Implementation - MoSPI).
 Analyze the following official's competency profile and provide a concise, professional diagnostic explanation of why this competency gap exists and why learning is recommended.
 
 Role: ${params.role}
@@ -401,71 +292,37 @@ Return strict JSON with this exact structure:
     "Short reason bullet 2",
     "Short reason bullet 3"
   ],
-  "confidence": 0.91
+  "confidence": 0.93
 }`;
 
-      const response = await ai.models.generateContent({
-        model: 'gemini-2.5-flash',
-        contents: prompt,
-        config: {
-          responseMimeType: 'application/json',
-          temperature: 0.2,
-        },
-      });
+  const { text } = await generateWithGemini({
+    contents: prompt,
+    config: {
+      responseMimeType: 'application/json',
+      temperature: 0.2,
+    },
+  });
 
-      if (response.text) {
-        const parsed = JSON.parse(response.text);
-        if (parsed.aiDiagnosis && Array.isArray(parsed.whyRecommended)) {
-          const result = {
-            aiDiagnosis: parsed.aiDiagnosis,
-            whyRecommended: parsed.whyRecommended,
-            confidence: parsed.confidence || 0.91,
-          };
-          diagnosisCache.set(cacheKey, result);
-          return result;
-        }
-      }
-    } catch (err: any) {
-      // Check if quota/rate limit error (429)
-      const errString = String(err);
-      if (errString.includes('429') || errString.includes('RESOURCE_EXHAUSTED') || errString.includes('Quota')) {
-        lastQuotaExhaustedTime = Date.now();
-      }
-    }
+  const parsed = JSON.parse(text);
+  if (!parsed.aiDiagnosis || !Array.isArray(parsed.whyRecommended)) {
+    throw new Error('Invalid AI Gap diagnosis schema received from Gemini.');
   }
 
-  // Domain-specific statistical knowledge fallback
-  const lookupKey = params.competency.toLowerCase().trim();
-  const domainMatch =
-    DOMAIN_DIAGNOSTICS[lookupKey] ||
-    Object.entries(DOMAIN_DIAGNOSTICS).find(([k]) => lookupKey.includes(k) || k.includes(lookupKey))?.[1];
+  const result = {
+    aiDiagnosis: parsed.aiDiagnosis,
+    whyRecommended: parsed.whyRecommended,
+    confidence: parsed.confidence || 0.92,
+  };
 
-  let fallbackResult: { aiDiagnosis: string; whyRecommended: string[]; confidence: number };
-
-  if (domainMatch) {
-    fallbackResult = {
-      aiDiagnosis: domainMatch.aiDiagnosis,
-      whyRecommended: domainMatch.whyRecommended,
-      confidence: domainMatch.confidence,
-    };
-  } else {
-    fallbackResult = {
-      aiDiagnosis: `Official exhibits an Application Deficiency in ${params.competency} where conceptual foundations are established (${params.diagnosticScore}%) but operational workflow execution (${params.practicalScore}%) requires targeted capacity building.`,
-      whyRecommended: [
-        `Target role benchmark mandates Level ${params.requiredLevel} proficiency for official duties.`,
-        `Diagnostic assessment showed ${params.diagnosticScore}% knowledge score vs ${params.practicalScore}% practical execution.`,
-        `Targeted intervention recommended to accelerate Level ${params.currentLevel} → Level ${params.requiredLevel} transition.`,
-      ],
-      confidence: 0.88,
-    };
-  }
-
-  diagnosisCache.set(cacheKey, fallbackResult);
-  return fallbackResult;
+  diagnosisCache.set(cacheKey, result);
+  return result;
 }
 
 export const generateAIGapDiagnosis = generateAIGapExplanation;
 
+/**
+ * Generate AI questions strictly from provided training content.
+ */
 export async function generateAIQuestionsFromContent(params: {
   content: string;
   competency: string;
@@ -478,16 +335,13 @@ export async function generateAIQuestionsFromContent(params: {
     return questionsCache.get(cacheKey)!;
   }
 
-  const ai = await getGenAI();
-  if (ai) {
-    try {
-      const prompt = `You are the STATVIA AI Assessment Generator for India's Official Statistical System.
+  const prompt = `You are the STATVIA AI Assessment Generator for India's Official Statistical System.
 Generate exactly ${params.questionCount} high-quality Multiple Choice Questions (MCQs) strictly based on the provided text for the competency "${params.competency}".
 Difficulty target: ${params.difficulty}.
 
 SOURCE CONTENT:
 """
-${params.content.slice(0, 10000)}
+${params.content.slice(0, 15000)}
 """
 
 CRITICAL INSTRUCTIONS:
@@ -504,447 +358,313 @@ Return strict JSON array with this structure:
     "options": ["Option A", "Option B", "Option C", "Option D"],
     "correctAnswer": 0,
     "explanation": "Why Option A is correct according to the source material.",
-    "difficulty": "Medium",
+    "difficulty": "${params.difficulty}",
     "competency": "${params.competency}",
     "topic": "Key Subtopic",
     "sourceReference": "${params.sourceTitle}"
   }
 ]`;
 
-      const response = await ai.models.generateContent({
-        model: 'gemini-2.5-flash',
-        contents: prompt,
-        config: {
-          responseMimeType: 'application/json',
-          temperature: 0.3,
-        },
-      });
+  const { text } = await generateWithGemini({
+    contents: prompt,
+    config: {
+      responseMimeType: 'application/json',
+      temperature: 0.2,
+    },
+  });
 
-      if (response.text) {
-        const parsed = JSON.parse(response.text);
-        if (Array.isArray(parsed) && parsed.length > 0) {
-          const formatted = parsed.map((q, idx) => ({
-            id: q.id || `gen-q-${Date.now()}-${idx}`,
-            question: q.question,
-            options:
-              Array.isArray(q.options) && q.options.length === 4
-                ? q.options
-                : ['Option A', 'Option B', 'Option C', 'Option D'],
-            correctAnswer:
-              typeof q.correctAnswer === 'number' && q.correctAnswer >= 0 && q.correctAnswer < 4 ? q.correctAnswer : 0,
-            explanation: q.explanation || 'Verified with training source document.',
-            difficulty: q.difficulty || 'Medium',
-            competency: params.competency,
-            topic: q.topic || params.competency,
-            sourceReference: params.sourceTitle,
-          }));
-          questionsCache.set(cacheKey, formatted);
-          return formatted;
-        }
-      }
-    } catch (err: any) {
-      const errString = String(err);
-      if (errString.includes('429') || errString.includes('RESOURCE_EXHAUSTED') || errString.includes('Quota')) {
-        lastQuotaExhaustedTime = Date.now();
-      }
-    }
+  const parsed = JSON.parse(text);
+  if (!Array.isArray(parsed) || parsed.length === 0) {
+    throw new Error('Gemini failed to generate questions from content.');
   }
 
-  // High-fidelity fallback questions tailored to Official Statistics
-  const fallbackQuestions: QuizQuestion[] = [
-    {
-      id: `q-demo-1`,
-      question: `In survey data processing with Python's pandas library, which method is most appropriate to replace missing socio-economic observation values with the stratum median?`,
-      options: [
-        `df.groupby('stratum')['income'].transform(lambda x: x.fillna(x.median()))`,
-        `df['income'].replaceAll(median)`,
-        `df.stratum.drop_duplicates()`,
-        `df.apply(lambda x: x.dropna())`,
-      ],
-      correctAnswer: 0,
-      explanation: `groupby with transform and fillna(median) calculates the median per stratum group and imputes it without altering DataFrame index structure.`,
-      difficulty: 'Medium',
-      competency: params.competency,
-      topic: 'Data Imputation & Grouping',
-      sourceReference: params.sourceTitle || 'Official Statistics Python Handbook',
-    },
-    {
-      id: `q-demo-2`,
-      question: `When validating household survey records, what is the primary risk of dropping rows with incomplete responses instead of statistical imputation?`,
-      options: [
-        `Introduces non-response bias and distorts population aggregate estimates`,
-        `Increases computer memory utilization unnecessarily`,
-        `Causes syntax compilation errors in Python runtime`,
-        `Violates data formatting protocols in standard CSVs`,
-      ],
-      correctAnswer: 0,
-      explanation: `Systematic deletion of missing observations leads to sample selection bias, skewing final population weights and estimates.`,
-      difficulty: 'Medium',
-      competency: params.competency,
-      topic: 'Survey Quality Protocols',
-      sourceReference: params.sourceTitle || 'NSSO Survey Methodology Manual',
-    },
-    {
-      id: `q-demo-3`,
-      question: `Which Python function from the NumPy package is used to verify that sampling weights sum up exactly to the estimated universe population?`,
-      options: [
-        `np.isclose(np.sum(weights), total_population, atol=1e-5)`,
-        `np.verify_weights(weights)`,
-        `np.population_equal()`,
-        `np.matrix_multiply()`,
-      ],
-      correctAnswer: 0,
-      explanation: `np.isclose allows floating point tolerance checks when validating weighting totals against census projections.`,
-      difficulty: 'Hard',
-      competency: params.competency,
-      topic: 'Weight Calibration',
-      sourceReference: params.sourceTitle || 'Statistical Estimation Standards',
-    },
-    {
-      id: `q-demo-4`,
-      question: `Under the National Data Sharing and Accessibility Policy (NDSAP), how must microdata containing direct citizen identifiers be treated prior to public release?`,
-      options: [
-        `Subjected to statistical disclosure control (SDC) and k-anonymity masking`,
-        `Published directly without modification for open access`,
-        `Converted into proprietary encrypted binary format only`,
-        `Sent via unencrypted email to registered researchers`,
-      ],
-      correctAnswer: 0,
-      explanation: `Statistical Disclosure Control (SDC) ensures that individual respondents cannot be re-identified in public use files (PUFs).`,
-      difficulty: 'Easy',
-      competency: params.competency,
-      topic: 'Data Privacy & Dissemination',
-      sourceReference: params.sourceTitle || 'MoSPI Data Dissemination Policy',
-    },
-  ];
+  const formatted: QuizQuestion[] = parsed.map((q, idx) => ({
+    id: q.id || `gen-q-${Date.now()}-${idx + 1}`,
+    question: q.question,
+    options:
+      Array.isArray(q.options) && q.options.length === 4
+        ? q.options
+        : ['Option A', 'Option B', 'Option C', 'Option D'],
+    correctAnswer:
+      typeof q.correctAnswer === 'number' && q.correctAnswer >= 0 && q.correctAnswer < 4 ? q.correctAnswer : 0,
+    explanation: q.explanation || 'Verified with training source document.',
+    difficulty: q.difficulty || params.difficulty,
+    competency: params.competency,
+    topic: q.topic || params.competency,
+    sourceReference: params.sourceTitle,
+  }));
 
-  questionsCache.set(cacheKey, fallbackQuestions);
-  return fallbackQuestions;
+  questionsCache.set(cacheKey, formatted);
+  return formatted;
 }
 
+/**
+ * Generate Personalized Assessment Questions targeting a learner's specific competency gap and course.
+ */
+export async function generatePersonalizedCourseQuestions(params: {
+  courseTitle: string;
+  courseDescription?: string;
+  competencyName: string;
+  currentLevel: number;
+  requiredLevel: number;
+  gapSize: number;
+  difficulty: 'Easy' | 'Medium' | 'Hard' | 'Mixed';
+  questionCount: number;
+  uploadedMaterialContext?: string;
+}): Promise<QuizQuestion[]> {
+  const materialSnippet = params.uploadedMaterialContext
+    ? `\nUPLOADED MATERIAL CONTEXT:\n"""\n${params.uploadedMaterialContext.slice(0, 4000)}\n"""\n`
+    : '';
+
+  const prompt = `You are the STATVIA / NIPUN Personalized Assessment Engine for India's Ministry of Statistics & Programme Implementation (MoSPI).
+
+Generate exactly ${params.questionCount} personalized Multiple Choice Questions (MCQs) for an officer preparing for or completing:
+COURSE: "${params.courseTitle}"
+COURSE DESCRIPTION: "${params.courseDescription || 'Official statistical training module'}"
+TARGET COMPETENCY: "${params.competencyName}"
+OFFICER CURRENT LEVEL: Level ${params.currentLevel}
+TARGET REQUIRED LEVEL: Level ${params.requiredLevel}
+IDENTIFIED GAP: ${params.gapSize} level deficit
+DIFFICULTY: "${params.difficulty}"
+${materialSnippet}
+
+PEDAGOGICAL REQUIREMENTS:
+1. Target the transition from Level ${params.currentLevel} to Level ${params.requiredLevel}.
+   - If moving to Level 3 (Applied): Focus on practical application, calculations, and official workflow operations.
+   - If moving to Level 4/5 (Advanced/Strategic): Focus on edge cases, complex multi-stage variance estimation, SNA balancing, or microdata disclosure risk.
+2. Ground all questions in genuine MoSPI statistical domains (NSSO, PLFS, ASI, CPI, WPI, SNA 2008, CAPI, DPDP 2023, Python/pandas microdata wrangling).
+3. If uploaded material is provided above, prioritize questions grounded in that specific material.
+4. Each question must have 4 distinct, plausible options and exactly 1 correct option index (0 to 3).
+5. Provide a thorough, educational explanation referencing MoSPI standards and formulas.
+
+Return STRICT JSON array:
+[
+  {
+    "id": "pers-q1",
+    "question": "Clear question text?",
+    "options": ["Option A", "Option B", "Option C", "Option D"],
+    "correctAnswer": 0,
+    "explanation": "Detailed explanation citing official MoSPI methodology.",
+    "difficulty": "${params.difficulty}",
+    "competency": "${params.competencyName}",
+    "topic": "Subtopic",
+    "sourceReference": "${params.courseTitle}"
+  }
+]`;
+
+  const { text } = await generateWithGemini({
+    contents: prompt,
+    config: {
+      responseMimeType: 'application/json',
+      temperature: 0.3,
+    },
+  });
+
+  const parsed = JSON.parse(text);
+  if (!Array.isArray(parsed) || parsed.length === 0) {
+    throw new Error('Gemini failed to generate personalized course assessment questions.');
+  }
+
+  return parsed.map((q, idx) => ({
+    id: q.id || `pers-q-${Date.now()}-${idx + 1}`,
+    question: q.question,
+    options:
+      Array.isArray(q.options) && q.options.length === 4
+        ? q.options
+        : ['Option A', 'Option B', 'Option C', 'Option D'],
+    correctAnswer:
+      typeof q.correctAnswer === 'number' && q.correctAnswer >= 0 && q.correctAnswer < 4 ? q.correctAnswer : 0,
+    explanation: q.explanation || 'Verified against MoSPI statistical curriculum standards.',
+    difficulty: q.difficulty || params.difficulty,
+    competency: params.competencyName,
+    topic: q.topic || params.competencyName,
+    sourceReference: params.courseTitle,
+  }));
+}
+
+/**
+ * Generate AI Mentor Response grounded strictly in real officer profile, competencies, and gaps from PostgreSQL.
+ */
 export async function generateAIMentorResponse(params: {
   userMessage: string;
   conversationHistory?: { sender: string; content: string }[];
-  groundingDocuments?: { fileName: string; keySummary: string }[];
+  nipunContext?: {
+    user: any;
+    role?: any;
+    competencies?: any[];
+    gaps?: any[];
+    selectedCourses?: any[];
+    learningProgress?: any[];
+    assessments?: any[];
+    materials?: any[];
+    recommendations?: any[];
+  };
   learnerProfile?: any;
   competencies?: any[];
   gaps?: any[];
   learningPath?: any;
-}): Promise<{ reply: string; suggestedActions: { label: string; actionType: string; payload?: any }[] }> {
-  const profile = params.learnerProfile || {
-    name: 'Ananya Sharma',
-    designation: 'Senior Statistical Officer',
+}): Promise<{
+  reply: string;
+  suggestedActions: { label: string; actionType: string; payload?: any }[];
+}> {
+  const ctx: any = params.nipunContext || {};
+  const user = ctx.user || params.learnerProfile || {
+    name: 'Officer',
+    designation: 'Statistical Officer',
     ministry: 'Ministry of Statistics & Programme Implementation (MoSPI)',
     level: 11,
-    roleReadiness: 82,
-    verifiedSkillsCount: 14,
+    roleReadiness: 75,
   };
-  const userGaps = params.gaps || [];
-  const pathTitle = params.learningPath?.title || 'Senior Statistical Officer Readiness Path';
-  const docsSnippet = params.groundingDocuments && params.groundingDocuments.length > 0
-    ? params.groundingDocuments.map(d => `- Document: ${d.fileName} | Key Summary: ${d.keySummary}`).join('\n')
-    : 'Standard MoSPI Statistical Reference Repository (PLFS, ASI, SNA 2008, DPDP 2023, CAPI standards)';
+  const role = ctx.role || {};
+  const competencies = ctx.competencies || params.competencies || [];
+  const gaps = ctx.gaps || params.gaps || [];
+  const selectedCourses = ctx.selectedCourses || [];
+  const learningProgress = ctx.learningProgress || [];
+  const assessments = ctx.assessments || [];
+  const materials = ctx.materials || [];
+  const recommendations = ctx.recommendations || [];
 
-  const priorityGapsSummary = userGaps.length > 0
-    ? userGaps.map((g: any) => `${g.competencyName} (Current: L${g.currentLevel} → Required: L${g.requiredLevel}, Deficit: ${g.gapType})`).join(', ')
-    : 'Python Survey Microdata Cleaning (L2→L3, APPLICATION_GAP)';
+  // Compact sanitized NIPUN context payload
+  const compactContext = {
+    user: {
+      id: user.id,
+      name: user.name,
+      designation: user.designation,
+      cadre: user.cadre || 'Indian Statistical Service (ISS)',
+      ministry: user.ministry || 'Ministry of Statistics & Programme Implementation (MoSPI)',
+      department: user.department || 'National Statistical Office (NSO)',
+      payLevel: user.payLevel || user.level || 11,
+      roleReadiness: user.roleReadiness || 75,
+    },
+    role: {
+      currentRole: user.currentRole || user.designation,
+      targetRole: user.targetRole || 'Deputy Director (Statistics)',
+      ...role,
+    },
+    competencies: competencies.slice(0, 10).map((c: any) => ({
+      name: c.name || c.competencyName || c.competency_name,
+      currentLevel: c.currentLevel || c.current_level,
+      requiredLevel: c.requiredLevel || c.required_level,
+      status: c.status,
+    })),
+    gaps: gaps.slice(0, 6).map((g: any) => ({
+      competency: g.competencyName || g.competency_name || g.competency,
+      currentLevel: g.currentLevel || g.current_level,
+      requiredLevel: g.requiredLevel || g.required_level,
+      gapType: g.gapType || g.gap_type || 'APPLICATION_GAP',
+      priority: g.priority || 'HIGH',
+    })),
+    selectedCourses: selectedCourses.slice(0, 5).map((c: any) => ({
+      title: c.title || c.course_title,
+      provider: c.provider || 'iGOT Karmayogi',
+      status: c.status || 'IN_PROGRESS',
+    })),
+    learningProgress: learningProgress.slice(0, 5).map((p: any) => ({
+      step: p.step_number || p.step,
+      title: p.title,
+      status: p.status,
+    })),
+    recentAssessments: assessments.slice(0, 3).map((a: any) => ({
+      score: a.score_percentage || a.score,
+      passed: a.passed,
+      completedAt: a.completed_at,
+    })),
+    uploadedMaterials: materials.slice(0, 3).map((m: any) => ({
+      fileName: m.file_name || m.fileName,
+      summary: (m.executive_summary || m.keySummary || '').slice(0, 200),
+    })),
+    recommendations: recommendations.slice(0, 4).map((r: any) => ({
+      reason: r.reason,
+      priority: r.priority_level || r.priority || 'HIGH',
+    })),
+  };
 
-  const verifiedCompsSummary = (params.competencies || [])
-    .filter((c: any) => c.status === 'VERIFIED' || c.currentLevel >= c.requiredLevel)
-    .map((c: any) => `${c.name} (Level ${c.currentLevel})`)
-    .join(', ') || 'Survey Sampling, Official Statistics, Data Visualization';
+  const systemInstruction = `You are the NIPUN competency development assistant.
+You help government officers understand their competency profile, skill gaps, learning progress and assessment performance.
 
-  const systemInstruction = `You are STATVIA / NIPUN AI Mentor, the official Statistical Capacity Building Assistant for India's Official Statistical System (Ministry of Statistics & Programme Implementation - MoSPI).
-You are guiding officer ${profile.name}, currently designated as ${profile.designation} (${profile.ministry}, Cadre: ${profile.cadre || 'Subordinate Statistical Service - SSS'}).
+Use the supplied NIPUN data as the authoritative source for user-specific facts.
 
-OFFICER CONTEXT:
-- Role Readiness: ${profile.roleReadiness || 82}%
-- Current Pay Level: Level ${profile.level || 11}
-- Target Role: ${profile.targetRole || 'Assistant Director / Lead Data Analyst'}
-- Verified Competencies (${profile.verifiedSkillsCount || 14}): ${verifiedCompsSummary}
-- Priority Competency Gaps (${userGaps.length}): ${priorityGapsSummary}
-- Active Learning Path: "${pathTitle}"
-- Methodological Grounding & Standards:
-${docsSnippet}
+Never invent a competency, score, course, assessment result, learning progress value or recommendation.
 
-CORE BEHAVIOR:
-1. Provide authoritative, statistically precise, and supportive guidance aligned with MoSPI standards (NSSO, CSO, NAD, SDRD, FOD, PLFS, ASI, CPI, SNA 2008, DPDP Act 2023, and FRAC competency dictionary).
-2. For coding/statistical queries (Python, pandas, R, SQL, survey multiplier weights, SDC, CAPI validation), provide clean, production-ready code examples and explanations.
-3. For career progression and learning queries, explain how iGOT Karmayogi micro-modules, STATVIA interactive simulation labs, and NSSTA Greater Noida residential programmes help bridge their specific competency gaps and improve APAR/SPARROW readiness.
-4. Keep the tone respectful, official yet conversational, and format responses with clean markdown headers and bullet points.`;
+When explaining a gap:
+- identify the competency
+- state current level
+- state required level
+- explain the gap
+- identify likely root cause if evidence exists
+- recommend an appropriate learning action
 
-  const ai = await getGenAI();
-  if (ai) {
-    try {
-      // Build multi-turn contents
-      const contents: Array<{ role: 'user' | 'model'; parts: Array<{ text: string }> }> = [];
+When recommending learning:
+prefer the user's selected courses and available NIPUN learning materials.
 
-      if (Array.isArray(params.conversationHistory) && params.conversationHistory.length > 0) {
-        for (const msg of params.conversationHistory.slice(-8)) {
-          if (msg.content && msg.content.trim()) {
-            const role = msg.sender === 'user' ? 'user' : 'model';
-            contents.push({
-              role,
-              parts: [{ text: msg.content.trim() }],
-            });
-          }
-        }
-      }
+You are an assistant and advisor.
+You do NOT determine official competency scores.
+Official scores are determined by the deterministic assessment and competency scoring engine.
 
-      // Append current message
-      contents.push({
-        role: 'user',
-        parts: [{ text: params.userMessage || 'Hello' }],
-      });
+If the user asks about their NIPUN data, answer from actual PostgreSQL data provided below.
+If the question requires general knowledge (such as explaining a statistical concept, formula, or general question), you may answer using general knowledge.
 
-      let response: any = null;
-      const candidateModels = ['gemini-2.5-flash', 'gemini-2.0-flash', 'gemini-1.5-flash'];
+Clearly distinguish:
+- user-specific NIPUN data
+- general explanation
+- recommendations/inference
 
-      for (const modelName of candidateModels) {
-        try {
-          response = await ai.models.generateContent({
-            model: modelName,
-            contents,
-            config: {
-              systemInstruction: `You are STATVIA / NIPUN AI Assistant, the official Statistical Capacity Building Assistant for India's Official Statistical System (Ministry of Statistics & Programme Implementation - MoSPI).
-You are guiding officer ${profile.name}, currently designated as ${profile.designation} (${profile.ministry}, Cadre: ${profile.cadre || 'Subordinate Statistical Service - SSS'}).
+OFFICER AUTHORITATIVE NIPUN CONTEXT (from PostgreSQL):
+${JSON.stringify(compactContext, null, 2)}`;
 
-OFFICER CONTEXT:
-- Role Readiness: ${profile.roleReadiness || 82}%
-- Current Pay Level: Level ${profile.level || 11}
-- Target Role: ${profile.targetRole || 'Assistant Director / Lead Data Analyst'}
-- Verified Competencies (${profile.verifiedSkillsCount || 14}): ${verifiedCompsSummary}
-- Priority Competency Gaps (${userGaps.length}): ${priorityGapsSummary}
-- Active Learning Path: "${pathTitle}"
-- Methodological Grounding & Standards:
-${docsSnippet}
+  // Build multi-turn contents
+  const contents: Array<{ role: 'user' | 'model'; parts: Array<{ text: string }> }> = [];
 
-CORE INSTRUCTIONS:
-1. Answer the user's specific query directly and accurately.
-2. If the user asks a general knowledge, programming, or domain question (e.g. "What is Python?", "What is sampling methodology?", "What is the capital of India?"), provide a clear, direct, and authoritative answer to that specific question FIRST.
-3. Do NOT force officer competency gaps or Python gap text into unrelated general questions.
-4. Only discuss officer competency gaps, role readiness, or learning paths when the user explicitly asks about their gaps, recommendations, or learning progress.
-5. Format responses with clean markdown headers and bullet points.`,
-              temperature: 0.3,
-            },
-          });
-          if (response && response.text) break;
-        } catch {
-          // Try next model candidate
-        }
-      }
-
-      if (response && response.text && response.text.trim()) {
-        const replyText = response.text.trim();
-
-        // Dynamically deduce intelligent contextual action chips
-        const actions: { label: string; actionType: string; payload?: any }[] = [];
-        const lowerMsg = (params.userMessage + ' ' + replyText).toLowerCase();
-
-        if (lowerMsg.includes('python') || lowerMsg.includes('pandas') || lowerMsg.includes('code') || lowerMsg.includes('script')) {
-          actions.push({ label: 'Open Python Practice Lab', actionType: 'LAUNCH_LAB', payload: { labId: 'lab-survey-01' } });
-          actions.push({ label: 'Start Python Diagnostic Assessment', actionType: 'START_QUIZ', payload: { competency: 'Python' } });
-          actions.push({ label: 'View iGOT Python Courses', actionType: 'VIEW_RECOMMENDATIONS' });
-        } else if (lowerMsg.includes('reassessment') || lowerMsg.includes('certif') || lowerMsg.includes('post-learning')) {
-          actions.push({ label: 'Start Post-Learning Reassessment', actionType: 'START_REASSESSMENT' });
-          actions.push({ label: 'View Competency Passport', actionType: 'VIEW_PASSPORT' });
-        } else if (lowerMsg.includes('gap') || lowerMsg.includes('readiness') || lowerMsg.includes('checker') || lowerMsg.includes('diagnostic')) {
-          actions.push({ label: 'Launch AI Gap Checker', actionType: 'RUN_GAP_CHECK' });
-          actions.push({ label: 'Open Simulation Sandbox', actionType: 'LAUNCH_LAB' });
-          actions.push({ label: 'View Recommendations', actionType: 'VIEW_RECOMMENDATIONS' });
-        } else if (lowerMsg.includes('survey') || lowerMsg.includes('sampling') || lowerMsg.includes('plfs') || lowerMsg.includes('nsso')) {
-          actions.push({ label: 'Take Survey Sampling Quiz', actionType: 'START_QUIZ', payload: { competency: 'Survey Methodology' } });
-          actions.push({ label: 'Explore NSSTA Programmes', actionType: 'VIEW_RECOMMENDATIONS' });
-        } else {
-          actions.push({ label: 'Run AI Gap Diagnostic', actionType: 'RUN_GAP_CHECK' });
-          actions.push({ label: 'Launch Practice Sandbox', actionType: 'LAUNCH_LAB' });
-          actions.push({ label: 'View Learning Pathway', actionType: 'VIEW_RECOMMENDATIONS' });
-        }
-
-        return {
-          reply: replyText,
-          suggestedActions: actions.slice(0, 3),
-        };
-      }
-    } catch (err: any) {
-      console.warn('Gemini AI mentor error, using contextual domain fallback:', err?.message || err);
-      const errString = String(err);
-      if (errString.includes('429') || errString.includes('RESOURCE_EXHAUSTED') || errString.includes('Quota')) {
-        lastQuotaExhaustedTime = Date.now();
+  if (Array.isArray(params.conversationHistory) && params.conversationHistory.length > 0) {
+    for (const msg of params.conversationHistory.slice(-8)) {
+      if (msg.content && msg.content.trim()) {
+        const role = msg.sender === 'user' ? 'user' : 'model';
+        contents.push({
+          role,
+          parts: [{ text: msg.content.trim() }],
+        });
       }
     }
   }
 
-  // Multi-intent intelligent fallback classification engine
-  const userMsg = (params.userMessage || '').trim();
-  const lower = userMsg.toLowerCase();
+  contents.push({
+    role: 'user',
+    parts: [{ text: params.userMessage || 'Hello' }],
+  });
 
-  // 1. Skill Gap Questions ("What is my biggest current skill gap?")
-  if (
-    lower.includes('my biggest') ||
-    lower.includes('biggest current') ||
-    lower.includes('current skill gap') ||
-    (lower.includes('gap') && (lower.includes('my') || lower.includes('biggest') || lower.includes('current') || lower.includes('priority')))
-  ) {
-    return {
-      reply: `### Official Skill Gap Intelligence Analysis
+  const { text } = await generateWithGemini({
+    contents,
+    config: {
+      systemInstruction,
+      temperature: 0.3,
+    },
+  });
 
-Officer **${profile.name || 'Aarav Sharma'}**, based on your latest STATVIA empirical assessment for your role as **${profile.designation || 'Assistant Director (Statistics)'}**:
+  const replyText = text.trim();
 
-- **Highest Priority Skill Gap**: **Python Survey Microdata Cleaning**
-- **Current Verified Level**: Level 2 (Foundational)
-- **Required Target Level**: Level 4 (Advanced Operational)
-- **Gap Classification**: APPLICATION_GAP (Deficit: **2 levels**)
+  // Dynamically deduce intelligent contextual action chips
+  const actions: { label: string; actionType: string; payload?: any }[] = [];
+  const lowerMsg = (params.userMessage + ' ' + replyText).toLowerCase();
 
-**AI Triangulation Evidence:**
-- **Knowledge Comprehension**: 48% syntax score in multiple-choice evaluations.
-- **Operational Execution**: Practical errors detected in pandas vector operations, multi-index grouping, and non-response multiplier weight calibrations on NSSO/PLFS microdata.`,
-      suggestedActions: [
-        { label: 'Run AI Gap Diagnostic', actionType: 'RUN_GAP_CHECK' },
-        { label: 'Start Python Diagnostic Assessment', actionType: 'START_QUIZ', payload: { competency: 'Python' } },
-        { label: 'Open Practice Sandbox', actionType: 'LAUNCH_LAB' },
-      ],
-    };
+  if (lowerMsg.includes('python') || lowerMsg.includes('pandas') || lowerMsg.includes('code')) {
+    actions.push({ label: 'Open Python Practice Lab', actionType: 'LAUNCH_LAB', payload: { labId: 'lab-survey-01' } });
+    actions.push({ label: 'Start Python Diagnostic Assessment', actionType: 'START_QUIZ', payload: { competency: 'Python' } });
+    actions.push({ label: 'View iGOT Python Courses', actionType: 'VIEW_RECOMMENDATIONS' });
+  } else if (lowerMsg.includes('gap') || lowerMsg.includes('readiness') || lowerMsg.includes('diagnostic')) {
+    actions.push({ label: 'Launch AI Gap Checker', actionType: 'RUN_GAP_CHECK' });
+    actions.push({ label: 'Open Simulation Sandbox', actionType: 'LAUNCH_LAB' });
+    actions.push({ label: 'View Recommendations', actionType: 'VIEW_RECOMMENDATIONS' });
+  } else if (lowerMsg.includes('survey') || lowerMsg.includes('sampling') || lowerMsg.includes('plfs') || lowerMsg.includes('nsso')) {
+    actions.push({ label: 'Take Survey Sampling Quiz', actionType: 'START_QUIZ', payload: { competency: 'Survey Methodology' } });
+    actions.push({ label: 'Explore NSSTA Programmes', actionType: 'VIEW_RECOMMENDATIONS' });
+  } else {
+    actions.push({ label: 'Run AI Gap Diagnostic', actionType: 'RUN_GAP_CHECK' });
+    actions.push({ label: 'Launch Practice Sandbox', actionType: 'LAUNCH_LAB' });
+    actions.push({ label: 'View Learning Pathway', actionType: 'VIEW_RECOMMENDATIONS' });
   }
 
-  // 2. Next Learning Recommendations ("What should I learn next?")
-  if (
-    lower.includes('learn next') ||
-    lower.includes('should i learn') ||
-    lower.includes('next step') ||
-    lower.includes('what to study') ||
-    lower.includes('next action')
-  ) {
-    return {
-      reply: `### Recommended Immediate Learning Intervention
-
-Officer **${profile.name || 'Aarav Sharma'}**, to accelerate your role readiness from **${profile.roleReadiness || 74}%** toward Senior Statistical Officer benchmarks:
-
-1. **iGOT Karmayogi Accredited Micro-Module**
-   - **Course**: *Python for Official Statistical Analysis & Microdata Pipelines*
-   - **Duration**: 2h 30m (Self-Paced)
-   - **Focus Areas**: pandas \`groupby().transform()\`, outlier trimming, and sample weight calibration.
-
-2. **STATVIA Interactive Simulation Sandbox**
-   - **Task**: *NSS 78th Round Household Data Cleaning & Weight Imputation*
-   - **Duration**: 20 mins interactive sandbox practice.
-
-3. **Verification & Credentialing**
-   - Complete the **Python Level 3 Post-Learning Reassessment** to elevate your level in the **National Competency Passport**.`,
-      suggestedActions: [
-        { label: 'View iGOT Course Catalog', actionType: 'VIEW_RECOMMENDATIONS' },
-        { label: 'Launch Simulation Sandbox', actionType: 'LAUNCH_LAB', payload: { labId: 'lab-survey-01' } },
-        { label: 'Take Level 3 Assessment', actionType: 'START_QUIZ', payload: { competency: 'Python' } },
-      ],
-    };
-  }
-
-  // 3. Domain Question: Sampling Methodology ("What is sampling methodology?")
-  if (
-    lower.includes('sampling methodology') ||
-    lower.includes('sampling design') ||
-    lower.includes('stratified sampling') ||
-    lower.includes('sample weight')
-  ) {
-    return {
-      reply: `### Survey Methodology & Sampling Framework (MoSPI Standards)
-
-**Sampling Methodology** in India's Official Statistical System (NSSO, PLFS, ASI, Household Surveys) refers to the multi-stage probability design used to select representative units across socio-economic strata.
-
-### Core Methodological Components:
-1. **Primary Sampling Units (PSUs)**:
-   - **Rural Sector**: Census Villages / Gram Panchayats.
-   - **Urban Sector**: Urban Frame Survey (UFS) blocks.
-2. **Secondary & Ultimate Sampling Units (SSUs / USUs)**:
-   - Households or manufacturing enterprises selected via **Circular Systematic Sampling**.
-3. **Multiplier & Design Weight Formula**:
-   \\[
-   W_{hij} = \\frac{1}{P_{hi}} \\times \\frac{1}{m_{hi}} \\times \\frac{N_{hi}}{n_{hi}}
-   \\]
-   Where $P_{hi}$ is the inclusion probability of PSU $h$, adjusted for non-response multiplier factors.
-4. **Variance Estimation**: Jackknife linearization or Balanced Repeated Replication (BRR) for complex survey estimators.`,
-      suggestedActions: [
-        { label: 'Take Survey Methodology Quiz', actionType: 'START_QUIZ', payload: { competency: 'Survey Methodology' } },
-        { label: 'Explore NSSTA Survey Courses', actionType: 'VIEW_RECOMMENDATIONS' },
-      ],
-    };
-  }
-
-  // 4. Concept Explanation: Python ("What is Python?")
-  if (
-    lower.includes('what is python') ||
-    (lower.includes('python') && !lower.includes('gap') && !lower.includes('score') && !lower.includes('my'))
-  ) {
-    return {
-      reply: `### Python in Official Statistics & Data Processing
-
-**Python** is an open-source, high-level programming language widely adopted by MoSPI, NSO, and international statistical agencies for automated data pipelines, survey microdata processing, and machine learning imputation.
-
-### Key Applications in National Statistical Operations:
-- **Data Wrangling (pandas & numpy)**: Vectorized operations for cleaning large-scale NSSO and PLFS microdata files containing millions of rows.
-- **Statistical Aggregation**: Computing weighted means, medians, and domain estimates using design multipliers.
-- **Data Quality & Validation**: Automated validation schemas using \`pydantic\` and \`try-except\` exception logging.
-- **Disclosure Risk Control**: Executing $k$-anonymity ($k \\ge 5$) and perturbation algorithms before releasing microdata to the public.`,
-      suggestedActions: [
-        { label: 'Open Python Practice Lab', actionType: 'LAUNCH_LAB', payload: { labId: 'lab-survey-01' } },
-        { label: 'Start Python Diagnostic Assessment', actionType: 'START_QUIZ', payload: { competency: 'Python' } },
-      ],
-    };
-  }
-
-  // 5. General Knowledge: Capital of India ("What is the capital of India?")
-  if (lower.includes('capital of india') || lower.includes('capital of bharat')) {
-    return {
-      reply: `**New Delhi** is the capital of India.
-
-As your **NIPUN STATVIA Assistant**, headquarters of the **Ministry of Statistics & Programme Implementation (MoSPI)** and the **National Statistical Office (NSO)** are located in **Sardar Patel Bhawan / Sankhyiki Bhawan, New Delhi**.`,
-      suggestedActions: [
-        { label: 'Run AI Gap Diagnostic', actionType: 'RUN_GAP_CHECK' },
-        { label: 'View Learning Pathway', actionType: 'VIEW_RECOMMENDATIONS' },
-      ],
-    };
-  }
-
-  // 6. Multi-turn Follow-up ("How can I improve it?")
-  if (
-    lower.includes('improve it') ||
-    lower.includes('fix it') ||
-    lower.includes('how to improve') ||
-    lower.includes('how can i close it')
-  ) {
-    return {
-      reply: `### Step-by-Step Action Plan to Close Your Priority Competency Gap
-
-To elevate your competency level from **Level 2 (Foundational)** to **Level 3 (Applied)**:
-
-1. **Step 1: Practice Vector Operations**
-   - Use \`df.groupby('stratum')['income'].transform(lambda x: x.fillna(x.median()))\` instead of iterative loops.
-2. **Step 2: Complete the STATVIA Simulation Sandbox**
-   - Work through the 20-minute NSS 78th Round Household Cleaning Lab.
-3. **Step 3: Post-Learning Reassessment**
-   - Take the official Level 3 Reassessment. Achieving $\\ge 70\\%$ elevates your level in your official **Competency Passport**.`,
-      suggestedActions: [
-        { label: 'Launch Simulation Sandbox', actionType: 'LAUNCH_LAB', payload: { labId: 'lab-survey-01' } },
-        { label: 'Take Level 3 Assessment', actionType: 'START_QUIZ', payload: { competency: 'Python' } },
-      ],
-    };
-  }
-
-  // 7. General Default Fallback
   return {
-    reply: `Namaste Officer **${profile.name || 'Aarav Sharma'}**. As ${profile.designation || 'Assistant Director'} (${profile.ministry || 'MoSPI'}), I am your dedicated STATVIA Capacity Building Assistant.
-
-Regarding your query: "${userMsg}"
-
-I can assist you with:
-1. **Empirical Skill Gap Analysis** (e.g. *"What is my biggest current skill gap?"*)
-2. **Targeted Learning Recommendations** (e.g. *"What should I learn next?"*)
-3. **Statistical Methodologies & Standards** (e.g. *"What is sampling methodology?"* or *"What is SNA 2008?"*)
-4. **Data Science & Computing** (e.g. *"What is Python?"* or *"How to compute PLFS multipliers?"*)`,
-    suggestedActions: [
-      { label: 'Run AI Gap Diagnostic', actionType: 'RUN_GAP_CHECK' },
-      { label: 'View Learning Pathway', actionType: 'VIEW_RECOMMENDATIONS' },
-      { label: 'Take Diagnostic Assessment', actionType: 'START_QUIZ', payload: { competency: 'Python' } },
-    ],
+    reply: replyText,
+    suggestedActions: actions.slice(0, 3),
   };
 }

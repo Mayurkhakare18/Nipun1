@@ -30,46 +30,67 @@ export function useRealtimeSubscription({
     }
 
     let channel: RealtimeChannel | null = null;
-    let isSubscribed = true;
+    let isMounted = true;
 
-    try {
-      setStatus('SUBSCRIBING');
-      const channelName = `realtime_${table}_${filter || 'all'}_${Date.now()}`;
+    const setupSubscription = async () => {
+      try {
+        setStatus('SUBSCRIBING');
 
-      channel = supabase.channel(channelName);
+        // Deterministic, stable channel name without Date.now() churn
+        const sanitizedFilter = filter ? filter.replace(/[^a-zA-Z0-9_=.]/g, '_') : 'all';
+        const channelName = `realtime:${schema}:${table}:${sanitizedFilter}`;
 
-      channel
-        .on(
-          'postgres_changes' as any,
-          {
-            event,
-            schema,
-            table,
-            ...(filter ? { filter } : {}),
-          },
-          (payload: RealtimePostgresChangesPayload<any>) => {
-            if (isSubscribed && callbackRef.current) {
-              callbackRef.current(payload);
+        // If an existing channel with the same name exists, remove it cleanly first
+        const existingChannels = supabase.getChannels();
+        const existingChannel = existingChannels.find((ch) => ch.topic === channelName || ch.topic === `realtime:${channelName}`);
+        if (existingChannel) {
+          await supabase.removeChannel(existingChannel);
+        }
+
+        if (!isMounted) return;
+
+        channel = supabase.channel(channelName);
+
+        const changeConfig: any = {
+          event,
+          schema,
+          table,
+        };
+        if (filter) {
+          changeConfig.filter = filter;
+        }
+
+        channel
+          .on(
+            'postgres_changes' as any,
+            changeConfig,
+            (payload: RealtimePostgresChangesPayload<any>) => {
+              if (isMounted && callbackRef.current) {
+                callbackRef.current(payload);
+              }
             }
-          }
-        )
-        .subscribe((subscriptionStatus) => {
-          if (!isSubscribed) return;
-          if (subscriptionStatus === 'SUBSCRIBED') {
-            setStatus('SUBSCRIBED');
-          } else if (subscriptionStatus === 'CLOSED') {
-            setStatus('CLOSED');
-          } else if (subscriptionStatus === 'CHANNEL_ERROR') {
-            setStatus('ERROR');
-          }
-        });
-    } catch (err) {
-      console.warn(`[Supabase Realtime] Failed to initialize channel for table ${table}:`, err);
-      setStatus('ERROR');
-    }
+          )
+          .subscribe((subscriptionStatus, err) => {
+            if (!isMounted) return;
+            if (subscriptionStatus === 'SUBSCRIBED') {
+              setStatus('SUBSCRIBED');
+            } else if (subscriptionStatus === 'CLOSED') {
+              setStatus('CLOSED');
+            } else if (subscriptionStatus === 'CHANNEL_ERROR' || subscriptionStatus === 'TIMED_OUT') {
+              console.warn(`[Supabase Realtime] Channel status for ${table}:`, subscriptionStatus, err?.message || '');
+              setStatus('ERROR');
+            }
+          });
+      } catch (err) {
+        console.warn(`[Supabase Realtime] Failed to initialize channel for table ${table}:`, err);
+        if (isMounted) setStatus('ERROR');
+      }
+    };
+
+    setupSubscription();
 
     return () => {
-      isSubscribed = false;
+      isMounted = false;
       if (channel) {
         supabase.removeChannel(channel).catch((err) => {
           console.warn(`[Supabase Realtime] Cleanup error for channel ${table}:`, err);

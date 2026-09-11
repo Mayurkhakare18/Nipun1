@@ -133,6 +133,23 @@ export const LearnerDashboard: React.FC = () => {
     }, [showNotification]),
   });
 
+  useRealtimeSubscription({
+    table: 'assignments',
+    filter: userFilter,
+    enabled: !!currentUser,
+    onPayload: useCallback(() => {
+      loadDashboardData();
+    }, [loadDashboardData]),
+  });
+
+  useRealtimeSubscription({
+    table: 'learning_progress',
+    enabled: !!currentUser,
+    onPayload: useCallback(() => {
+      loadDashboardData();
+    }, [loadDashboardData]),
+  });
+
   const pSkill = activePrioritySkill || authPrioritySkill;
 
   // Determine the single next best action based on current state

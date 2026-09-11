@@ -58,7 +58,7 @@ export const WorkforceDashboard: React.FC = () => {
       if (payload.eventType === 'INSERT' && payload.new) {
         showNotification(
           'System Activity Event',
-          `${payload.new.action || 'System action'} recorded by ${payload.new.user || 'Officer'}.`,
+          `${payload.new.action || 'System action'} recorded by ${payload.new.user_name || payload.new.user || 'Officer'}.`,
           'info'
         );
       }
