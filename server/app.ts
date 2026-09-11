@@ -1950,7 +1950,8 @@ Key Topics:
         return res.status(401).json({ success: false, error: 'Authentication required. Please log in.' });
       }
 
-      const { fileName = 'MoSPI_Document.pdf', fileContent, fileBase64, competency, difficulty, questionCount } = req.body || {};
+      const { fileName = 'MoSPI_Document.pdf', fileContent, competency, difficulty, questionCount } = req.body || {};
+      const fileBase64 = req.body?.fileBase64 || req.body?.fileData;
 
       let extractedText = '';
       let pageCount = 1;
