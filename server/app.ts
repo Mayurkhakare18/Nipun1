@@ -1692,58 +1692,77 @@ export function createExpressApp() {
       }
 
       // 5. Select / Generate questions
-      // Priority 1: PostgreSQL assessment_questions bank
-      const { data: approvedQRows } = await serverSupabase
-        .from('assessment_questions')
-        .select('*')
-        .ilike('topic', `%${targetCompName}%`);
+      // Priority 1: Gemini AI question generation strictly grounded in Course + Competency Gap + Levels + Uploaded Materials
+      let generatedQuestions: QuizQuestion[] = [];
+      const neededCount = Math.min(10, Math.max(3, Number(count) || 4));
 
-      const finalQuestions: QuizQuestion[] = [];
-      const neededCount = Math.min(10, Math.max(3, Number(count) || 5));
+      // Fetch matching uploaded materials for this learner or competency to ground questions
+      let uploadedMaterialContext = '';
+      let sourceMaterialFileName = '';
+      try {
+        const { data: userMaterials } = await serverSupabase
+          .from('uploaded_learning_materials')
+          .select('file_name, executive_summary, extracted_topics')
+          .or(`user_id.eq.${user.id},extracted_topics.cs.{"${targetCompName}"}`)
+          .order('uploaded_at', { ascending: false })
+          .limit(2);
 
-      if (approvedQRows && approvedQRows.length > 0) {
-        for (const row of approvedQRows) {
-          if (finalQuestions.length >= neededCount) break;
-          finalQuestions.push({
-            id: row.id,
-            question: row.question_text,
-            options: row.options,
-            correctAnswer: row.correct_answer_index,
-            explanation: row.explanation || 'Verified approved assessment question.',
-            difficulty: row.difficulty || difficulty,
-            competency: targetCompName,
-            topic: row.topic || targetCompName,
-            sourceReference: 'MoSPI National Question Bank',
-          });
+        if (userMaterials && userMaterials.length > 0) {
+          sourceMaterialFileName = userMaterials.map((m: any) => m.file_name).join(', ');
+          uploadedMaterialContext = userMaterials
+            .map((m: any) => `[Source Document: ${m.file_name}]\n${m.executive_summary || ''}`)
+            .join('\n\n');
+        }
+      } catch (matErr) {
+        console.warn('[PersonalizedAssessment] Warning fetching uploaded material context:', matErr);
+      }
+
+      try {
+        generatedQuestions = await generatePersonalizedCourseQuestions({
+          courseTitle: targetCourseTitle || `${targetCompName} Targeted Evaluation`,
+          courseDescription: targetCourseDesc,
+          competencyName: targetCompName,
+          currentLevel,
+          requiredLevel,
+          gapSize,
+          difficulty,
+          questionCount: neededCount,
+          uploadedMaterialContext: uploadedMaterialContext || undefined,
+        });
+      } catch (aiErr: any) {
+        console.warn('[PersonalizedAssessment] Gemini question generation warning:', aiErr?.message);
+      }
+
+      const finalQuestions: QuizQuestion[] = [...generatedQuestions];
+
+      // Priority 2: Fallback backfill from PostgreSQL assessment_questions bank if AI was unavailable
+      if (finalQuestions.length < neededCount) {
+        const { data: approvedQRows } = await serverSupabase
+          .from('assessment_questions')
+          .select('*')
+          .ilike('topic', `%${targetCompName}%`)
+          .limit(neededCount - finalQuestions.length);
+
+        if (approvedQRows && approvedQRows.length > 0) {
+          for (const row of approvedQRows) {
+            if (finalQuestions.length >= neededCount) break;
+            finalQuestions.push({
+              id: row.id,
+              question: row.question_text,
+              options: row.options,
+              correctAnswer: row.correct_answer_index,
+              explanation: row.explanation || 'Verified approved assessment question.',
+              difficulty: row.difficulty || difficulty,
+              competency: targetCompName,
+              topic: row.topic || targetCompName,
+              sourceReference: 'MoSPI National Question Bank',
+            });
+          }
         }
       }
 
-      // Priority 2 / 3: Gemini 3.6 Flash personalized question generation if more questions needed
-      if (finalQuestions.length < neededCount) {
-        const aiCount = neededCount - finalQuestions.length;
-        try {
-          const generatedQuestions = await generatePersonalizedCourseQuestions({
-            courseTitle: targetCourseTitle || `${targetCompName} Targeted Evaluation`,
-            courseDescription: targetCourseDesc,
-            competencyName: targetCompName,
-            currentLevel,
-            requiredLevel,
-            gapSize,
-            difficulty,
-            questionCount: Math.max(3, aiCount),
-          });
-
-          for (const gq of generatedQuestions) {
-            if (finalQuestions.length >= neededCount) break;
-            finalQuestions.push(gq);
-          }
-        } catch (aiErr: any) {
-          console.warn('[PersonalizedAssessment] Gemini question generation warning:', aiErr?.message);
-          // If Gemini fails but we have at least 1 question, proceed with available
-          if (finalQuestions.length === 0) {
-            throw new Error(`Failed to generate personalized questions: ${aiErr?.message || aiErr}`);
-          }
-        }
+      if (finalQuestions.length === 0) {
+        throw new Error('Unable to generate or retrieve assessment questions for this course and competency.');
       }
 
       const assessmentId = `assess-pers-${Date.now()}`;
@@ -1775,7 +1794,6 @@ export function createExpressApp() {
         const qRows = finalQuestions.map((q, idx) => ({
           id: q.id,
           assessment_id: assessmentId,
-          competency_id: targetCompId,
           question_text: q.question,
           options: q.options,
           correct_answer_index: q.correctAnswer,
@@ -1804,6 +1822,7 @@ export function createExpressApp() {
           requiredLevel,
           gapSize,
           difficulty,
+          sourceMaterial: sourceMaterialFileName || null,
           totalQuestions: finalQuestions.length,
         },
       });
