@@ -1683,12 +1683,12 @@ export function createExpressApp() {
       let difficulty: 'Easy' | 'Medium' | 'Hard' = 'Medium';
       if (reqDifficulty && ['Easy', 'Medium', 'Hard'].includes(reqDifficulty)) {
         difficulty = reqDifficulty as 'Easy' | 'Medium' | 'Hard';
+      } else if (gapSize >= 3 || requiredLevel >= 4 || currentLevel >= 4) {
+        difficulty = 'Hard';
       } else if (currentLevel <= 2 && requiredLevel <= 2) {
         difficulty = 'Easy';
-      } else if (currentLevel <= 2 && requiredLevel >= 3) {
+      } else {
         difficulty = 'Medium';
-      } else if (currentLevel >= 3) {
-        difficulty = 'Hard';
       }
 
       // 5. Select / Generate questions
