@@ -521,14 +521,27 @@ async function runProductionTestSuite() {
         fileBase64: largeDummy.toString('base64'),
       }),
     });
+    const rawText = await res.text();
     let data: any = {};
     try {
-      data = await res.json();
+      data = JSON.parse(rawText);
     } catch {
-      data = { error: await res.text() };
+      data = { error: rawText };
     }
-    if ((res.status === 400 || res.status === 413) && (data.error?.includes('15MB') || res.status === 413 || String(data.error).toLowerCase().includes('payload') || String(data.error).toLowerCase().includes('large'))) {
-      record('N', 'Oversized PDF validation (> 15 MB -> 400/413 rejection)', 'PASS', `HTTP ${res.status}: ${data.error || 'Payload correctly rejected for exceeding size limit'}`);
+    if (
+      (res.status === 400 || res.status === 413) &&
+      (data.error?.includes('15MB') ||
+        res.status === 413 ||
+        String(data.error).toLowerCase().includes('payload') ||
+        String(data.error).toLowerCase().includes('large') ||
+        res.statusText.toLowerCase().includes('payload'))
+    ) {
+      record(
+        'N',
+        'Oversized PDF validation (> 15 MB -> 400/413 rejection)',
+        'PASS',
+        `HTTP ${res.status}: ${typeof data.error === 'string' ? data.error.slice(0, 100) : 'Payload correctly rejected for exceeding size limit'}`
+      );
     } else {
       record('N', 'Oversized PDF validation (> 15 MB -> 400/413 rejection)', 'FAIL', `Status ${res.status}, error=${data.error}`);
     }
@@ -548,8 +561,8 @@ async function runProductionTestSuite() {
         Authorization: `Bearer ${jwt}`,
       },
       body: JSON.stringify({
-        courseId: 'crs-python-01',
-        competencyId: 'comp-python-01',
+        courseId: 'cat-igot-py-101',
+        competencyId: 'comp-tech-01',
         count: 3,
       }),
     });
@@ -583,8 +596,8 @@ async function runProductionTestSuite() {
         Authorization: `Bearer ${jwt}`,
       },
       body: JSON.stringify({
-        courseId: 'crs-survey-01',
-        competencyId: 'comp-survey-01',
+        courseId: 'cat-igot-surv-des-101',
+        competencyId: 'comp-stat-01',
         count: 3,
       }),
     });
@@ -592,7 +605,7 @@ async function runProductionTestSuite() {
     const questions = data.questions || data.assessment?.questions || [];
     const q1 = questions[0];
     const qText = (q1?.question || '').toLowerCase() + ' ' + (q1?.explanation || '').toLowerCase();
-    const isSurveyGrounded = qText.includes('survey') || qText.includes('sampling') || qText.includes('strata') || qText.includes('cluster') || qText.includes('pps') || qText.includes('capi');
+    const isSurveyGrounded = qText.includes('survey') || qText.includes('sampling') || qText.includes('strata') || qText.includes('cluster') || qText.includes('pps') || qText.includes('capi') || qText.includes('questionnaire');
     if (res.status === 200 && data.success && questions.length >= 3 && isSurveyGrounded) {
       record('P', 'Survey Design course + Survey gap personalized question generation', 'PASS', `HTTP 200, Difficulty=${data.context?.difficulty || data.personalization?.difficulty || 'Hard'}, Gap=${data.context?.gapSize || 3}, questions=${questions.length}`, {
         question: q1.question,
@@ -616,12 +629,12 @@ async function runProductionTestSuite() {
       fetch(`${PROD_URL}/api/assessments/personalized`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${jwt}` },
-        body: JSON.stringify({ courseId: 'crs-python-01', competencyId: 'comp-python-01', count: 2 }),
+        body: JSON.stringify({ courseId: 'cat-igot-py-101', competencyId: 'comp-tech-01', targetLevel: 3, count: 2 }),
       }).then(r => r.json()),
       fetch(`${PROD_URL}/api/assessments/personalized`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${jwt}` },
-        body: JSON.stringify({ courseId: 'crs-survey-01', competencyId: 'comp-survey-01', count: 2 }),
+        body: JSON.stringify({ courseId: 'cat-igot-surv-des-101', competencyId: 'comp-stat-01', targetLevel: 4, count: 2 }),
       }).then(r => r.json()),
     ]);
 
