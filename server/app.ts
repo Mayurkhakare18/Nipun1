@@ -1696,7 +1696,7 @@ export function createExpressApp() {
       const { data: approvedQRows } = await serverSupabase
         .from('assessment_questions')
         .select('*')
-        .or(`competency_id.eq.${targetCompId},topic.ilike.%${targetCompName}%`);
+        .ilike('topic', `%${targetCompName}%`);
 
       const finalQuestions: QuizQuestion[] = [];
       const neededCount = Math.min(10, Math.max(3, Number(count) || 5));
@@ -2080,7 +2080,6 @@ Key Topics:
         const qRows = result.generatedQuestions.map((q, idx) => ({
           id: q.id,
           assessment_id: assessmentId,
-          competency_id: 'comp-stat-01',
           question_text: q.question,
           options: q.options,
           correct_answer_index: q.correctAnswer,
