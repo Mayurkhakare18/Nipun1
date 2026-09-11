@@ -94,9 +94,17 @@ export const DocumentIntelligenceModal: React.FC = () => {
   const [difficulty, setDifficulty] = useState<'Easy' | 'Medium' | 'Hard' | 'Mixed'>('Medium');
   const [questionCount, setQuestionCount] = useState<number>(5);
 
-  const [pipelineState, setPipelineState] = useState<'IDLE' | 'UPLOADING' | 'EXTRACTING' | 'SUMMARIZING' | 'SUCCESS' | 'ERROR'>('IDLE');
+  const [pipelineState, setPipelineState] = useState<
+    'IDLE' | 'UPLOADING' | 'EXTRACTING' | 'OCR_PROCESSING' | 'SUMMARIZING' | 'SUCCESS' | 'ERROR'
+  >('IDLE');
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [summaryResult, setSummaryResult] = useState<StructuredDocumentSummaryState | null>(null);
+  const [extractionStats, setExtractionStats] = useState<{
+    pageCount: number;
+    nativePagesCount: number;
+    ocrPagesCount: number;
+    isScanned?: boolean;
+  } | null>(null);
   const [copiedSummary, setCopiedSummary] = useState<boolean>(false);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -113,6 +121,7 @@ export const DocumentIntelligenceModal: React.FC = () => {
   const handleFileSelected = (file: File) => {
     setErrorMessage(null);
     setSummaryResult(null);
+    setExtractionStats(null);
 
     // Validate file size limit (15MB serverless cap)
     if (file.size > 15 * 1024 * 1024) {
@@ -159,6 +168,7 @@ export const DocumentIntelligenceModal: React.FC = () => {
     setSelectedFile(null);
     setFileBase64(null);
     setErrorMessage(null);
+    setExtractionStats(null);
     setDocumentTitle(preset.fileName);
     setDocumentText(preset.excerpt);
     setTargetCompetency(preset.competency);
@@ -172,10 +182,10 @@ export const DocumentIntelligenceModal: React.FC = () => {
 
     setErrorMessage(null);
     setSummaryResult(null);
+    setExtractionStats(null);
     setPipelineState('UPLOADING');
 
     try {
-      // Transition states visually to represent the real pipeline
       setPipelineState(fileBase64 ? 'EXTRACTING' : 'SUMMARIZING');
 
       const res = await api.summarizeAndGenerateFromDocument({
@@ -189,6 +199,9 @@ export const DocumentIntelligenceModal: React.FC = () => {
 
       if (res.success && res.summary) {
         setSummaryResult(res.summary);
+        if ((res as any).extraction) {
+          setExtractionStats((res as any).extraction);
+        }
         setPipelineState('SUCCESS');
         showNotification(
           'Document Analyzed & Questions Generated',
@@ -319,11 +332,9 @@ ${(summaryResult.suggestedAssessmentTopics || []).map((a, i) => `${i + 1}. ${a}`
                   <p className="text-xs text-amber-800 leading-relaxed font-medium">
                     {errorMessage}
                   </p>
-                  {errorMessage.includes('OCR') && (
-                    <div className="pt-2 text-[11px] text-amber-700 bg-amber-100/60 p-2.5 rounded-xl border border-amber-200/60">
-                      💡 <strong>Guidance:</strong> This file consists of scanned bitmap images without digital text streams. For automated summarization and MCQ generation, please upload a text-based PDF or select one of the official MoSPI document presets below.
-                    </div>
-                  )}
+                  <div className="pt-2 text-[11px] text-amber-700 bg-amber-100/60 p-2.5 rounded-xl border border-amber-200/60">
+                    💡 <strong>Guidance:</strong> NIPUN supports text PDFs, scanned/image-based PDFs, and mixed documents with automated hybrid OCR. Please ensure the document contains legible statistical reports or survey manuals.
+                  </div>
                 </div>
               </div>
             )}
@@ -488,12 +499,13 @@ ${(summaryResult.suggestedAssessmentTopics || []).map((a, i) => `${i + 1}. ${a}`
                 <div className="space-y-1">
                   <h3 className="text-lg font-bold text-[#000a1e] font-['Public_Sans',sans-serif]">
                     {pipelineState === 'UPLOADING' && 'Uploading Document to Server...'}
-                    {pipelineState === 'EXTRACTING' && 'Validating %PDF Magic Bytes & Extracting Text...'}
-                    {pipelineState === 'SUMMARIZING' && 'Gemini 3.5 Generating 10-Section Summary & MCQs...'}
+                    {pipelineState === 'EXTRACTING' && 'Reading PDF & Extracting Text (Hybrid Native + OCR)...'}
+                    {pipelineState === 'OCR_PROCESSING' && 'OCR Processing Scanned Pages...'}
+                    {pipelineState === 'SUMMARIZING' && 'Gemini Generating 10-Section Summary & MCQs...'}
                   </h3>
                   <p className="text-xs text-[#44474e] max-w-md mx-auto">
-                    {pipelineState === 'EXTRACTING'
-                      ? 'Parsing PDF character streams, validating structure, and verifying text density.'
+                    {pipelineState === 'EXTRACTING' || pipelineState === 'OCR_PROCESSING'
+                      ? 'Analyzing document pages: extracting digital character streams and executing multimodal OCR for scanned/image pages.'
                       : `Grounded AI analysis across official statistical standards, synthesizing 10 structured sections and ${questionCount} diagnostic MCQs.`}
                   </p>
                 </div>
@@ -506,11 +518,16 @@ ${(summaryResult.suggestedAssessmentTopics || []).map((a, i) => `${i + 1}. ${a}`
                 {/* Result Header Banner */}
                 <div className="p-5 rounded-2xl bg-[#002147] text-white flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
                   <div className="space-y-1">
-                    <div className="flex items-center gap-2">
+                    <div className="flex items-center gap-2 flex-wrap">
                       <FileCheck className="w-4 h-4 text-[#fe9832]" />
                       <span className="text-xs font-bold text-[#fe9832] font-mono">
                         {summaryResult.fileName} ({summaryResult.fileSizeFormatted})
                       </span>
+                      {extractionStats && (
+                        <span className="text-[11px] font-mono font-semibold px-2 py-0.5 rounded-md bg-white/10 text-white border border-white/20">
+                          {extractionStats.pageCount} pages processed — {extractionStats.nativePagesCount} text pages + {extractionStats.ocrPagesCount} OCR pages
+                        </span>
+                      )}
                     </div>
                     <h3 className="text-lg font-bold font-['Public_Sans',sans-serif]">
                       {summaryResult.documentTitle || 'MoSPI Statistical Document Intelligence Report'}

@@ -1,30 +1,152 @@
 import type { QuizQuestion } from '../../src/types';
 
 let genAIClient: any = null;
-let lastQuotaExhaustedTime = 0;
-const QUOTA_COOLDOWN_MS = 30000; // 30s cooldown if all candidate models hit 429 quota
 
-export const GEMINI_CANDIDATE_MODELS = [
-  'gemini-3.5-flash',
+const DEFAULT_CANDIDATE_MODELS = [
   'gemini-3.5-flash-lite',
-  'gemini-3.6-flash',
+  'gemini-flash-lite-latest',
+  'gemini-3.7-flash',
   'gemini-flash-latest',
+  'gemini-3.8-flash',
 ];
 
-async function getGenAI(): Promise<any> {
-  if (Date.now() - lastQuotaExhaustedTime < QUOTA_COOLDOWN_MS) {
-    throw new Error('Gemini API quota cooldown active (429 RESOURCE_EXHAUSTED). Please retry shortly.');
+/**
+ * Returns prioritized Gemini candidate models with support for GEMINI_MODEL env override.
+ */
+export function getGeminiCandidateModels(): string[] {
+  const envModel = process.env.GEMINI_MODEL?.trim();
+  if (envModel) {
+    return [envModel, ...DEFAULT_CANDIDATE_MODELS.filter((m) => m !== envModel)];
+  }
+  return [...DEFAULT_CANDIDATE_MODELS];
+}
+
+export const GEMINI_CANDIDATE_MODELS = getGeminiCandidateModels();
+
+export type GeminiErrorType =
+  | 'GEMINI_AUTH_ERROR'
+  | 'GEMINI_PERMISSION_ERROR'
+  | 'GEMINI_MODEL_ERROR'
+  | 'GEMINI_BAD_REQUEST'
+  | 'GEMINI_RATE_LIMIT'
+  | 'GEMINI_TIMEOUT'
+  | 'GEMINI_PROVIDER_ERROR'
+  | 'GEMINI_EMPTY_RESPONSE';
+
+/**
+ * Classify Gemini API errors into standard production categories.
+ */
+export function classifyGeminiError(err: any): { errorType: GeminiErrorType; status: number } {
+  const msg = (err?.message || String(err || '')).toLowerCase();
+  const rawStatus = err?.status || err?.statusCode;
+  const status = typeof rawStatus === 'number'
+    ? rawStatus
+    : msg.includes('429')
+    ? 429
+    : msg.includes('401')
+    ? 401
+    : msg.includes('403')
+    ? 403
+    : msg.includes('404')
+    ? 404
+    : msg.includes('400')
+    ? 400
+    : msg.includes('408')
+    ? 408
+    : 500;
+
+  if (
+    status === 401 ||
+    msg.includes('unauthenticated') ||
+    msg.includes('api_key_invalid') ||
+    msg.includes('api key not valid') ||
+    msg.includes('invalid api key')
+  ) {
+    return { errorType: 'GEMINI_AUTH_ERROR', status: 401 };
+  }
+  if (status === 403 || msg.includes('permission_denied') || msg.includes('forbidden')) {
+    return { errorType: 'GEMINI_PERMISSION_ERROR', status: 403 };
+  }
+  if (status === 404 || msg.includes('model_not_found') || msg.includes('not found') || msg.includes('is not found')) {
+    return { errorType: 'GEMINI_MODEL_ERROR', status: 404 };
+  }
+  if (
+    status === 429 ||
+    msg.includes('resource_exhausted') ||
+    msg.includes('quota') ||
+    msg.includes('rate limit') ||
+    msg.includes('too many requests')
+  ) {
+    return { errorType: 'GEMINI_RATE_LIMIT', status: 429 };
+  }
+  if (
+    status === 408 ||
+    msg.includes('deadline_exceeded') ||
+    msg.includes('timeout') ||
+    msg.includes('etimedout') ||
+    msg.includes('timed out')
+  ) {
+    return { errorType: 'GEMINI_TIMEOUT', status: 408 };
+  }
+  if (
+    status === 400 ||
+    msg.includes('invalid_argument') ||
+    msg.includes('bad request') ||
+    msg.includes('invalid request')
+  ) {
+    return { errorType: 'GEMINI_BAD_REQUEST', status: 400 };
+  }
+  if (err?.name === 'GEMINI_EMPTY_RESPONSE' || msg.includes('empty response') || msg.includes('no usable content')) {
+    return { errorType: 'GEMINI_EMPTY_RESPONSE', status: 502 };
+  }
+  return {
+    errorType: 'GEMINI_PROVIDER_ERROR',
+    status: typeof status === 'number' && status >= 400 && status < 600 ? status : 500,
+  };
+}
+
+/**
+ * Log structured, sanitized error without leaking API keys, bearer tokens, or personal identifiers.
+ */
+export function logGeminiStructuredError(params: {
+  endpoint: string;
+  model: string;
+  error: any;
+}): { errorType: GeminiErrorType; status: number; message: string } {
+  const { errorType, status } = classifyGeminiError(params.error);
+  const key = process.env.GEMINI_API_KEY || '';
+  let safeMsg = (params.error?.message || String(params.error || 'Unknown Gemini error'))
+    .replace(/Bearer\s+[A-Za-z0-9._-]+/gi, 'Bearer [REDACTED]');
+  if (key && key.length > 5) {
+    safeMsg = safeMsg.split(key).join('[REDACTED]');
   }
 
-  if (!process.env.GEMINI_API_KEY) {
-    throw new Error('GEMINI_API_KEY is not configured in server environment.');
+  const logEntry = {
+    endpoint: params.endpoint,
+    provider: 'gemini',
+    model: params.model,
+    errorType,
+    status,
+    message: safeMsg,
+    timestamp: new Date().toISOString(),
+  };
+
+  console.error('[GEMINI_STRUCTURED_ERROR]', JSON.stringify(logEntry));
+  return { errorType, status, message: safeMsg };
+}
+
+async function getGenAI(): Promise<any> {
+  if (!process.env.GEMINI_API_KEY || !process.env.GEMINI_API_KEY.trim()) {
+    const err = new Error('GEMINI_API_KEY is not configured in server environment.');
+    (err as any).status = 401;
+    throw err;
   }
 
   if (!genAIClient) {
     try {
       const { GoogleGenAI } = await import('@google/genai');
       genAIClient = new GoogleGenAI({
-        apiKey: process.env.GEMINI_API_KEY,
+        apiKey: process.env.GEMINI_API_KEY.trim(),
       });
     } catch (err: any) {
       console.error('[GEMINI_INIT_ERROR] Could not initialize GoogleGenAI client:', err?.message || String(err));
@@ -36,16 +158,17 @@ async function getGenAI(): Promise<any> {
 
 /**
  * Execute a prompt with Google Gen AI with automatic fallback across candidate models.
+ * Safely parses response structure, finish reasons, candidates, and content parts.
  */
-async function generateWithGemini(options: {
+export async function generateWithGemini(options: {
   contents: any;
   config?: any;
 }): Promise<{ text: string; activeModel: string }> {
   const ai = await getGenAI();
+  const candidateModels = getGeminiCandidateModels();
   let lastError: any = null;
-  let allQuotaFailed = true;
 
-  for (const model of GEMINI_CANDIDATE_MODELS) {
+  for (const model of candidateModels) {
     try {
       const response = await ai.models.generateContent({
         model,
@@ -53,33 +176,55 @@ async function generateWithGemini(options: {
         config: options.config,
       });
 
-      if (response && response.text) {
-        return { text: response.text, activeModel: model };
+      let extractedText = '';
+
+      if (response && typeof response.text === 'string' && response.text.trim()) {
+        extractedText = response.text;
+      } else if (Array.isArray(response?.candidates) && response.candidates.length > 0) {
+        const candidate = response.candidates[0];
+        if (
+          candidate.finishReason === 'SAFETY' ||
+          candidate.finishReason === 'RECITATION' ||
+          candidate.finishReason === 'BLOCKLIST'
+        ) {
+          throw new Error(`Gemini response blocked by safety filter: finishReason=${candidate.finishReason}`);
+        }
+        const parts = candidate.content?.parts;
+        if (Array.isArray(parts) && parts.length > 0) {
+          extractedText = parts.map((p: any) => p.text || '').join('');
+        }
       }
+
+      if (extractedText && extractedText.trim()) {
+        return { text: extractedText, activeModel: model };
+      }
+
+      // If response had no usable text
+      const emptyErr = new Error(`Gemini model "${model}" returned empty response with no usable content.`);
+      (emptyErr as any).name = 'GEMINI_EMPTY_RESPONSE';
+      lastError = emptyErr;
     } catch (err: any) {
       lastError = err;
-      const errString = String(err);
-      const isQuota = errString.includes('429') || errString.includes('RESOURCE_EXHAUSTED') || errString.includes('Quota');
-      if (!isQuota) {
-        allQuotaFailed = false;
-      }
-      console.warn(`[GEMINI_MODEL_ATTEMPT_FAILED] Model "${model}" failed:`, err?.message || errString);
+      const { errorType, status } = classifyGeminiError(err);
+      console.warn(`[GEMINI_MODEL_ATTEMPT_FAILED] Model "${model}" [${errorType}:${status}]:`, err?.message || String(err));
     }
   }
 
-  if (allQuotaFailed) {
-    lastQuotaExhaustedTime = Date.now();
+  const activeModel = candidateModels[0] || 'gemini-3.5-flash-lite';
+  const key = process.env.GEMINI_API_KEY || '';
+  let cleanErrMsg = (lastError?.message || String(lastError || 'Unknown Gemini API error'))
+    .replace(/Bearer\s+[A-Za-z0-9._-]+/gi, 'Bearer [REDACTED]');
+  if (key && key.length > 5) {
+    cleanErrMsg = cleanErrMsg.split(key).join('[REDACTED]');
   }
 
-  const cleanErrMsg = (lastError?.message || String(lastError || 'Unknown Gemini API error')).replace(
-    new RegExp(process.env.GEMINI_API_KEY || '___NO_KEY___', 'g'),
-    '[REDACTED]'
-  );
-  throw new Error(`Gemini AI request failed across candidate models [${GEMINI_CANDIDATE_MODELS.join(', ')}]: ${cleanErrMsg}`);
+  const finalError = new Error(`Gemini AI request failed across candidate models [${candidateModels.join(', ')}]: ${cleanErrMsg}`);
+  (finalError as any).originalError = lastError;
+  throw finalError;
 }
 
 /**
- * Safe Health Check for Gemini API - verifies server configuration without calling Gemini remote API unnecessarily.
+ * Safe Health Check for Gemini API - verifies server configuration without remote API latency.
  */
 export function checkGeminiHealth(): {
   configured: boolean;
@@ -88,12 +233,119 @@ export function checkGeminiHealth(): {
   error?: string;
 } {
   const hasKey = !!process.env.GEMINI_API_KEY && process.env.GEMINI_API_KEY.trim().length > 0;
+  const candidateModels = getGeminiCandidateModels();
   return {
     configured: hasKey,
     provider: 'gemini',
-    model: GEMINI_CANDIDATE_MODELS[0],
+    model: candidateModels[0],
     ...(hasKey ? {} : { error: 'GEMINI_API_KEY is not configured in server environment.' }),
   };
+}
+
+/**
+ * Real Gemini Runtime Diagnostic Probe.
+ * Executes ONE minimal conceptual request ("Reply only with NIPUN_OK") to verify live remote connectivity.
+ */
+export async function probeGeminiRuntime(): Promise<{
+  configured: boolean;
+  reachable: boolean;
+  provider: string;
+  model: string;
+  probeStatus?: string;
+  latencyMs?: number;
+  error?: string;
+  errorType?: string;
+}> {
+  const candidateModels = getGeminiCandidateModels();
+  const defaultModel = candidateModels[0];
+  const hasKey = !!process.env.GEMINI_API_KEY && process.env.GEMINI_API_KEY.trim().length > 0;
+
+  if (!hasKey) {
+    return {
+      configured: false,
+      reachable: false,
+      provider: 'gemini',
+      model: defaultModel,
+      error: 'GEMINI_API_KEY is not configured in server environment.',
+      errorType: 'GEMINI_AUTH_ERROR',
+    };
+  }
+
+  const startTime = Date.now();
+  try {
+    const result = await generateWithGemini({
+      contents: 'Reply only with NIPUN_OK',
+      config: {
+        temperature: 0.0,
+        maxOutputTokens: 10,
+      },
+    });
+    const latencyMs = Date.now() - startTime;
+    return {
+      configured: true,
+      reachable: true,
+      provider: 'gemini',
+      model: result.activeModel,
+      probeStatus: result.text.trim().includes('NIPUN_OK') ? 'NIPUN_OK' : result.text.trim(),
+      latencyMs,
+    };
+  } catch (probeErr: any) {
+    const latencyMs = Date.now() - startTime;
+    const logged = logGeminiStructuredError({
+      endpoint: '/api/ai/health?probe=true',
+      model: defaultModel,
+      error: probeErr,
+    });
+    return {
+      configured: true,
+      reachable: false,
+      provider: 'gemini',
+      model: defaultModel,
+      errorType: logged.errorType,
+      error: logged.message,
+      latencyMs,
+    };
+  }
+}
+
+/**
+ * Real Multimodal Document OCR using Gemini Vision.
+ * Ingests base64 PDF document buffers directly to extract text, tables, percentages, and formulas verbatim.
+ */
+export async function performMultimodalDocumentOcr(
+  buffer: Buffer,
+  pageNumber?: number
+): Promise<string> {
+  const prompt = typeof pageNumber === 'number'
+    ? `You are an expert high-accuracy OCR engine for official statistical documents. Extract all text, tables, numbers, percentages, and statistical indicators from Page ${pageNumber} of this PDF document verbatim. Preserve headings, rows, columns, percentages, and formulas accurately without summary or conversational filler. Return only the extracted text.`
+    : `You are an expert high-accuracy OCR engine for official statistical documents. Extract all text, tables, numbers, headings, and statistical indicators from all pages of this scanned PDF document verbatim. Format each page preceded by 'PAGE <number>'. Preserve headings, rows, columns, percentages, and formulas accurately without summary or conversational filler. Return only the extracted text.`;
+
+  const base64Data = buffer.toString('base64');
+  const contents = [
+    {
+      role: 'user',
+      parts: [
+        {
+          inlineData: {
+            data: base64Data,
+            mimeType: 'application/pdf',
+          },
+        },
+        {
+          text: prompt,
+        },
+      ],
+    },
+  ];
+
+  const { text } = await generateWithGemini({
+    contents,
+    config: {
+      temperature: 0.1,
+    },
+  });
+
+  return text.trim();
 }
 
 // In-memory cache for diagnostic calls
@@ -524,62 +776,52 @@ export async function generateAIMentorResponse(params: {
   const materials = ctx.materials || [];
   const recommendations = ctx.recommendations || [];
 
-  // Compact sanitized NIPUN context payload
+  // Compact structured context payload strictly limited to authorized NIPUN domain data
   const compactContext = {
-    user: {
-      id: user.id,
-      name: user.name,
-      designation: user.designation,
-      cadre: user.cadre || 'Indian Statistical Service (ISS)',
-      ministry: user.ministry || 'Ministry of Statistics & Programme Implementation (MoSPI)',
-      department: user.department || 'National Statistical Office (NSO)',
-      payLevel: user.payLevel || user.level || 11,
-      roleReadiness: user.roleReadiness || 75,
-    },
-    role: {
-      currentRole: user.currentRole || user.designation,
-      targetRole: user.targetRole || 'Deputy Director (Statistics)',
-      ...role,
-    },
-    competencies: competencies.slice(0, 10).map((c: any) => ({
-      name: c.name || c.competencyName || c.competency_name,
+    role: user.currentRole || user.designation || 'Statistical Officer',
+    department: user.department || 'National Statistical Office (NSO)',
+    selectedCourses: selectedCourses.slice(0, 5).map((c: any) => ({
+      title: c.title || c.course_title,
+      provider: c.provider || 'iGOT Karmayogi',
+      status: c.status || 'IN_PROGRESS',
+    })),
+    competencies: competencies.slice(0, 10).map((c: any) => c.name || c.competencyName || c.competency_name),
+    competencyLevels: competencies.slice(0, 10).map((c: any) => ({
+      competency: c.name || c.competencyName || c.competency_name,
       currentLevel: c.currentLevel || c.current_level,
       requiredLevel: c.requiredLevel || c.required_level,
       status: c.status,
     })),
-    gaps: gaps.slice(0, 6).map((g: any) => ({
+    skillGaps: gaps.slice(0, 6).map((g: any) => ({
       competency: g.competencyName || g.competency_name || g.competency,
       currentLevel: g.currentLevel || g.current_level,
       requiredLevel: g.requiredLevel || g.required_level,
       gapType: g.gapType || g.gap_type || 'APPLICATION_GAP',
       priority: g.priority || 'HIGH',
-    })),
-    selectedCourses: selectedCourses.slice(0, 5).map((c: any) => ({
-      title: c.title || c.course_title,
-      provider: c.provider || 'iGOT Karmayogi',
-      status: c.status || 'IN_PROGRESS',
+      rootCause: g.aiDiagnosis || g.ai_diagnosis || 'Application skill deficit in operational practice',
     })),
     learningProgress: learningProgress.slice(0, 5).map((p: any) => ({
       step: p.step_number || p.step,
       title: p.title,
       status: p.status,
     })),
-    recentAssessments: assessments.slice(0, 3).map((a: any) => ({
+    assessmentResults: assessments.slice(0, 3).map((a: any) => ({
       score: a.score_percentage || a.score,
       passed: a.passed,
       completedAt: a.completed_at,
     })),
-    uploadedMaterials: materials.slice(0, 3).map((m: any) => ({
+    relevantLearningMaterials: materials.slice(0, 3).map((m: any) => ({
       fileName: m.file_name || m.fileName,
       summary: (m.executive_summary || m.keySummary || '').slice(0, 200),
     })),
     recommendations: recommendations.slice(0, 4).map((r: any) => ({
+      course: r.courses?.title || r.title || 'MoSPI Statistical Training',
       reason: r.reason,
       priority: r.priority_level || r.priority || 'HIGH',
     })),
   };
 
-  const systemInstruction = `You are the NIPUN competency development assistant.
+  const systemInstruction = `You are the NIPUN competency development assistant for India's Ministry of Statistics & Programme Implementation (MoSPI).
 You help government officers understand their competency profile, skill gaps, learning progress and assessment performance.
 
 Use the supplied NIPUN data as the authoritative source for user-specific facts.
@@ -611,6 +853,16 @@ Clearly distinguish:
 
 OFFICER AUTHORITATIVE NIPUN CONTEXT (from PostgreSQL):
 ${JSON.stringify(compactContext, null, 2)}`;
+
+  // Prompt size measurement and compression safeguard
+  const systemPromptBytes = Buffer.byteLength(systemInstruction, 'utf8');
+  const contextBytes = Buffer.byteLength(JSON.stringify(compactContext), 'utf8');
+  const userMessageBytes = Buffer.byteLength(params.userMessage || '', 'utf8');
+  const approxTotalInputTokens = Math.round((systemPromptBytes + contextBytes + userMessageBytes) / 4);
+
+  console.log(
+    `[AI_ASSISTANT_PROMPT_METRICS] SystemPrompt: ${systemPromptBytes}B, Context: ${contextBytes}B, UserMessage: ${userMessageBytes}B, ApproxTokens: ~${approxTotalInputTokens}`
+  );
 
   // Build multi-turn contents
   const contents: Array<{ role: 'user' | 'model'; parts: Array<{ text: string }> }> = [];

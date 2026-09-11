@@ -180,23 +180,47 @@ async function getPdfParser(): Promise<any> {
   }
 }
 
+export interface HybridPageDetail {
+  page: number;
+  method: 'native' | 'ocr';
+  text: string;
+  charCount: number;
+}
+
+export interface HybridPdfExtractionResult {
+  text: string;
+  pageCount: number;
+  nativePagesCount: number;
+  ocrPagesCount: number;
+  isScanned: boolean;
+  pages: HybridPageDetail[];
+  pageReferences: { page: number; point: string }[];
+}
+
 /**
- * Extracts text from PDF buffer using both v1 and v2 pdf-parse interfaces,
- * with pure-JS stream extraction fallback.
- * Detects scanned/image-only PDFs where no digital text stream exists.
+ * Hybrid Page-by-Page PDF Text Extraction.
+ * For each page:
+ * 1. Checks native digital text.
+ * 2. If character count >= 40, marks method = 'native'.
+ * 3. If character count < 40 and OCR callback is provided, executes real OCR and marks method = 'ocr'.
+ * 4. Merges all pages in original sequence:
+ *    PAGE 1
+ *    [text]
+ *    PAGE 2
+ *    [text]
  */
-export async function extractPdfText(
+export async function extractHybridPdfText(
   buffer: Buffer,
-  fileName: string
-): Promise<ExtractedPdfContent> {
+  fileName: string,
+  ocrCallback?: (buffer: Buffer, pageNumber?: number) => Promise<string>
+): Promise<HybridPdfExtractionResult> {
   const validation = validatePdfBuffer(buffer, fileName);
   if (!validation.valid) {
     throw new Error(validation.error || 'Invalid PDF document.');
   }
 
-  let extractedRawText = '';
-  let pageCount = 1;
-  let pagesList: Array<{ text: string; num: number }> = [];
+  let rawPagesList: Array<{ text: string; num: number }> = [];
+  let detectedPageCount = 1;
 
   const Parser = await getPdfParser();
 
@@ -204,17 +228,19 @@ export async function extractPdfText(
     try {
       if (typeof Parser === 'function' && !Parser.prototype?.getText) {
         const v1Data = await Parser(buffer);
-        extractedRawText = v1Data.text || '';
-        pageCount = v1Data.numpages || 1;
+        detectedPageCount = v1Data.numpages || 1;
+        rawPagesList = [{ text: v1Data.text || '', num: 1 }];
       } else if (typeof Parser === 'function' || Parser?.PDFParse) {
         const TargetClass = Parser.PDFParse || Parser;
         const parserInstance = new TargetClass({ data: buffer });
         try {
           const textRes = await parserInstance.getText();
-          extractedRawText = textRes.text || '';
-          pageCount = textRes.total || (Array.isArray(textRes.pages) ? textRes.pages.length : 1);
-          if (Array.isArray(textRes.pages)) {
-            pagesList = textRes.pages;
+          detectedPageCount = textRes.total || (Array.isArray(textRes.pages) ? textRes.pages.length : 1);
+          if (Array.isArray(textRes.pages) && textRes.pages.length > 0) {
+            rawPagesList = textRes.pages.map((p: any, idx: number) => ({
+              text: typeof p === 'string' ? p : p.text || '',
+              num: typeof p?.num === 'number' ? p.num : idx + 1,
+            }));
           }
         } finally {
           if (typeof parserInstance.destroy === 'function') {
@@ -227,54 +253,170 @@ export async function extractPdfText(
     }
   }
 
-  // If pdf-parse failed or returned no text, run native stream extractor
-  if (!extractedRawText || extractedRawText.trim().length === 0) {
+  // Fallback to native stream extractor if parser returned nothing
+  if (rawPagesList.length === 0) {
     const nativeRes = extractPdfNatively(buffer);
-    extractedRawText = nativeRes.text;
-    pageCount = Math.max(pageCount, nativeRes.pageCount);
-    if (pagesList.length === 0) {
-      pagesList = nativeRes.pages;
+    detectedPageCount = Math.max(detectedPageCount, nativeRes.pageCount);
+    rawPagesList = nativeRes.pages;
+  }
+
+  const pageCount = Math.max(1, detectedPageCount, rawPagesList.length);
+
+  // Check total native text across all pages to identify 100% scanned documents
+  const totalNativeChars = rawPagesList.reduce(
+    (acc, p) => acc + cleanExtractedText(p.text).replace(/\s/g, '').length,
+    0
+  );
+  const isScannedDocument = totalNativeChars < 40;
+
+  const processedPages: HybridPageDetail[] = [];
+  let nativePagesCount = 0;
+  let ocrPagesCount = 0;
+
+  // If document is 100% scanned and an OCR callback is provided, we can run document-level OCR
+  if (isScannedDocument && ocrCallback) {
+    try {
+      console.log(`[PDFExtractor] Scanned document detected (${fileName}). Invoking real multimodal OCR...`);
+      const ocrResult = await ocrCallback(buffer);
+      const cleanedOcr = cleanExtractedText(ocrResult);
+
+      // Split by PAGE <number> if present, otherwise treat as page 1
+      const pageSections = cleanedOcr.split(/(?:^|\n)PAGE\s+(\d+)[^\n]*\n/i);
+
+      if (pageSections.length > 1) {
+        for (let i = 1; i < pageSections.length; i += 2) {
+          const pageNum = parseInt(pageSections[i], 10) || Math.floor(i / 2) + 1;
+          const pageText = cleanExtractedText(pageSections[i + 1] || '');
+          if (pageText.length > 0) {
+            processedPages.push({
+              page: pageNum,
+              method: 'ocr',
+              text: pageText,
+              charCount: pageText.length,
+            });
+            ocrPagesCount++;
+          }
+        }
+      }
+
+      if (processedPages.length === 0 && cleanedOcr.length > 0) {
+        processedPages.push({
+          page: 1,
+          method: 'ocr',
+          text: cleanedOcr,
+          charCount: cleanedOcr.length,
+        });
+        ocrPagesCount = 1;
+      }
+    } catch (ocrErr) {
+      console.error('[PDFExtractor] Multimodal OCR failed on scanned document:', ocrErr);
+    }
+  } else {
+    // Process page-by-page hybrid extraction
+    for (let pageNum = 1; pageNum <= pageCount; pageNum++) {
+      const existingPage = rawPagesList.find((p) => p.num === pageNum) || rawPagesList[pageNum - 1];
+      const nativeText = cleanExtractedText(existingPage?.text || '');
+      const nonWhitespaceCount = nativeText.replace(/\s/g, '').length;
+
+      // Threshold: 40 characters of genuine content distinguishes digital text from scan artefacts
+      if (nonWhitespaceCount >= 40) {
+        processedPages.push({
+          page: pageNum,
+          method: 'native',
+          text: nativeText,
+          charCount: nativeText.length,
+        });
+        nativePagesCount++;
+      } else if (ocrCallback) {
+        console.log(`[PDFExtractor] Page ${pageNum} has insufficient native text (${nonWhitespaceCount} chars). Invoking OCR...`);
+        try {
+          const pageOcr = await ocrCallback(buffer, pageNum);
+          const cleanedPageOcr = cleanExtractedText(pageOcr);
+          processedPages.push({
+            page: pageNum,
+            method: 'ocr',
+            text: cleanedPageOcr || nativeText,
+            charCount: (cleanedPageOcr || nativeText).length,
+          });
+          ocrPagesCount++;
+        } catch (pageOcrErr) {
+          console.warn(`[PDFExtractor] Page ${pageNum} OCR failed, keeping native text:`, pageOcrErr);
+          processedPages.push({
+            page: pageNum,
+            method: 'native',
+            text: nativeText,
+            charCount: nativeText.length,
+          });
+          nativePagesCount++;
+        }
+      } else {
+        processedPages.push({
+          page: pageNum,
+          method: 'native',
+          text: nativeText,
+          charCount: nativeText.length,
+        });
+        nativePagesCount++;
+      }
     }
   }
 
-  const cleanedText = cleanExtractedText(extractedRawText);
-
-  // Scanned / Image-Only PDF Detection:
-  // If fewer than 30 non-whitespace characters exist, the PDF is an image-only / scanned document.
-  const isScanned = cleanedText.length < 30;
-
-  // Build page reference index
-  const pageReferences: { page: number; point: string }[] = [];
-  if (pagesList.length > 0) {
-    pagesList.forEach((p, idx) => {
-      const pageNum = p.num || idx + 1;
-      const firstLine = p.text
-        ? cleanExtractedText(p.text)
-            .split('\n')
-            .find((l) => l.length > 15)
-        : undefined;
-      if (firstLine) {
-        pageReferences.push({
-          page: pageNum,
-          point: firstLine.slice(0, 100).trim(),
-        });
-      }
-    });
-  } else if (!isScanned) {
-    // Generate logical chunks for references
-    const paragraphs = cleanedText.split('\n\n').filter((p) => p.length > 20);
-    paragraphs.slice(0, 8).forEach((p, idx) => {
-      pageReferences.push({
-        page: Math.floor(idx / 2) + 1,
-        point: p.slice(0, 90).trim(),
-      });
+  // If no pages were successfully processed, create fallback entry
+  if (processedPages.length === 0) {
+    processedPages.push({
+      page: 1,
+      method: 'native',
+      text: '',
+      charCount: 0,
     });
   }
 
+  // Format combined text preserving exact page sequence
+  const combinedText = processedPages
+    .map((p) => `PAGE ${p.page}\n${p.text}`)
+    .join('\n\n')
+    .trim();
+
+  // Build page references
+  const pageReferences: { page: number; point: string }[] = [];
+  processedPages.forEach((p) => {
+    if (p.text) {
+      const firstLine = p.text
+        .split('\n')
+        .find((l) => l.trim().length > 15 && !l.trim().startsWith('PAGE'));
+      if (firstLine) {
+        pageReferences.push({
+          page: p.page,
+          point: firstLine.slice(0, 100).trim(),
+        });
+      }
+    }
+  });
+
   return {
-    text: cleanedText,
-    pageCount: Math.max(1, pageCount),
-    isScanned,
+    text: combinedText,
+    pageCount: processedPages.length,
+    nativePagesCount,
+    ocrPagesCount,
+    isScanned: isScannedDocument,
+    pages: processedPages,
     pageReferences,
+  };
+}
+
+/**
+ * Extracts text from PDF buffer using hybrid extractor.
+ * Maintains backwards compatibility for existing call sites.
+ */
+export async function extractPdfText(
+  buffer: Buffer,
+  fileName: string
+): Promise<ExtractedPdfContent> {
+  const result = await extractHybridPdfText(buffer, fileName);
+  return {
+    text: result.text,
+    pageCount: result.pageCount,
+    isScanned: result.isScanned,
+    pageReferences: result.pageReferences,
   };
 }

@@ -16,8 +16,15 @@ import {
   generateAIMentorResponse,
   generatePersonalizedCourseQuestions,
   checkGeminiHealth,
+  probeGeminiRuntime,
+  performMultimodalDocumentOcr,
+  logGeminiStructuredError,
 } from './ai/gemini.js';
-import { extractPdfText, validatePdfBuffer } from './utils/pdf-extractor.js';
+import {
+  extractPdfText,
+  extractHybridPdfText,
+  validatePdfBuffer,
+} from './utils/pdf-extractor.js';
 import {
   fetchLearnerProfileCompetencyData,
   recalibrateLearnerGaps,
@@ -1591,9 +1598,14 @@ export function createExpressApp() {
   });
 
   // ==========================================
-  // AI HEALTH CHECK (SAFE - NO SECRETS, NO LIVE REMOTE CALL)
+  // AI HEALTH CHECK & SAFE RUNTIME DIAGNOSTIC PROBE
   // ==========================================
-  app.get(['/api/ai/health', '/ai/health'], (_req: Request, res: Response) => {
+  app.get(['/api/ai/health', '/ai/health'], async (req: Request, res: Response) => {
+    const shouldProbe = req.query.probe === 'true' || req.query.probe === '1';
+    if (shouldProbe) {
+      const probeResult = await probeGeminiRuntime();
+      return res.status(probeResult.reachable ? 200 : 503).json(probeResult);
+    }
     const health = checkGeminiHealth();
     res.status(health.configured ? 200 : 503).json(health);
   });
@@ -1974,6 +1986,10 @@ Key Topics:
 
       let extractedText = '';
       let pageCount = 1;
+      let nativePagesCount = 1;
+      let ocrPagesCount = 0;
+      let isScannedDoc = false;
+      let pagesDetail: any[] = [];
 
       if (fileBase64 && typeof fileBase64 === 'string' && fileBase64.trim()) {
         const cleanBase64 = fileBase64.includes(',') ? fileBase64.split(',')[1] : fileBase64;
@@ -1984,17 +2000,17 @@ Key Topics:
           return res.status(400).json({ success: false, error: validation.error });
         }
 
-        const extraction = await extractPdfText(pdfBuffer, fileName);
-        if (extraction.isScanned) {
-          return res.status(422).json({
-            success: false,
-            error: 'This PDF appears to be scanned/image-based and does not contain extractable text. OCR is required.',
-          });
-        }
+        // Execute hybrid extraction: native digital text where available, real multimodal OCR for scanned/image pages
+        const extraction = await extractHybridPdfText(pdfBuffer, fileName, performMultimodalDocumentOcr);
         extractedText = extraction.text;
         pageCount = extraction.pageCount;
+        nativePagesCount = extraction.nativePagesCount;
+        ocrPagesCount = extraction.ocrPagesCount;
+        isScannedDoc = extraction.isScanned;
+        pagesDetail = extraction.pages;
       } else if (fileContent && typeof fileContent === 'string' && fileContent.trim()) {
         extractedText = fileContent.trim();
+        pagesDetail = [{ page: 1, method: 'native', text: extractedText, charCount: extractedText.length }];
       } else {
         return res.status(400).json({
           success: false,
@@ -2002,10 +2018,10 @@ Key Topics:
         });
       }
 
-      if (!extractedText || extractedText.length < 30) {
+      if (!extractedText || extractedText.trim().length < 20) {
         return res.status(422).json({
           success: false,
-          error: 'This PDF appears to be scanned/image-based and does not contain extractable text. OCR is required.',
+          error: 'Unable to extract readable text from this document.',
         });
       }
 
@@ -2117,12 +2133,25 @@ Key Topics:
         summary: result,
         assessment: newAssessment,
         document: newDoc,
+        extraction: {
+          pageCount,
+          nativePagesCount,
+          ocrPagesCount,
+          isScanned: isScannedDoc,
+          pages: pagesDetail,
+        },
       });
     } catch (err: any) {
       console.error('[PDF_SUMMARIZE_ERROR]', err?.message || err);
-      res.status(500).json({
+      const logged = logGeminiStructuredError({
+        endpoint: '/api/documents/summarize-and-generate',
+        model: process.env.GEMINI_MODEL || 'gemini-3.5-flash-lite',
+        error: err,
+      });
+      res.status(logged.status === 401 ? 401 : logged.status === 403 ? 403 : 500).json({
         success: false,
-        error: err?.message || 'Failed to process document and generate questions.',
+        error: logged.message || 'Failed to process document and generate questions.',
+        errorType: logged.errorType,
       });
     }
   });
@@ -2453,10 +2482,17 @@ Key Topics:
       });
     } catch (err: any) {
       console.error('[AI_ASSISTANT_ERROR]', err?.message || err);
-      res.status(503).json({
+      const logged = logGeminiStructuredError({
+        endpoint: '/api/ai/assistant',
+        model: process.env.GEMINI_MODEL || 'gemini-3.5-flash-lite',
+        error: err,
+      });
+      res.status(logged.status === 401 ? 401 : logged.status === 403 ? 403 : 503).json({
         success: false,
         error: 'AI service temporarily unavailable',
         message: 'Gemini AI service is currently unavailable. Please try again later.',
+        errorType: logged.errorType,
+        cause: logged.message,
       });
     }
   };
