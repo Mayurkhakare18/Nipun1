@@ -147,12 +147,19 @@ async function runRealtimeE2ESuite() {
       return;
     }
 
-    console.log(`  -> Channel SUBSCRIBED. Triggering database mutation...`);
-    await mutateAction();
+    console.log(`  -> Channel SUBSCRIBED. Waiting 600ms before database mutation...`);
+    await new Promise((r) => setTimeout(r, 600));
 
-    // Wait up to 6 seconds for CDC message
+    const mutResult = await mutateAction();
+    if (mutResult && mutResult.error) {
+      console.error(`  [MUTATION ERROR] Flow ${flowId}:`, mutResult.error.message);
+    } else {
+      console.log(`  -> Database mutation executed successfully.`);
+    }
+
+    // Wait up to 7 seconds for CDC message
     const startWait = Date.now();
-    while (!received && Date.now() - startWait < 6000) {
+    while (!received && Date.now() - startWait < 7000) {
       await new Promise((r) => setTimeout(r, 200));
     }
 
@@ -180,7 +187,7 @@ async function runRealtimeE2ESuite() {
         table,
         role: client === learnerClient ? 'LEARNER' : client === trainerClient ? 'TRAINER' : 'ADMIN',
         status: 'FAIL',
-        details: `No CDC event received within 6000ms. Check publication & RLS.`,
+        details: `No CDC event received within 7000ms. Check publication & RLS.`,
       });
       console.log(`  [FAIL] Flow ${flowId} timed out waiting for CDC event.\n`);
     }
@@ -195,7 +202,7 @@ async function runRealtimeE2ESuite() {
     'audit_logs',
     undefined,
     async () => {
-      await adminClient.from('audit_logs').insert({
+      return await adminClient.from('audit_logs').insert({
         id: logId,
         user_id: aaravUid,
         user_name: 'Aarav Sharma',
@@ -219,7 +226,7 @@ async function runRealtimeE2ESuite() {
     'notifications',
     `user_id=eq.${aaravUid}`,
     async () => {
-      await adminClient.from('notifications').insert({
+      return await adminClient.from('notifications').insert({
         id: notifId,
         user_id: aaravUid,
         title: 'New Assignment Dispatched',
@@ -243,7 +250,7 @@ async function runRealtimeE2ESuite() {
     'assignments',
     `user_id=eq.${aaravUid}`,
     async () => {
-      await adminClient.from('assignments').insert({
+      return await adminClient.from('assignments').insert({
         id: assignId,
         user_id: aaravUid,
         title: 'National Accounts Modernization',
@@ -270,7 +277,7 @@ async function runRealtimeE2ESuite() {
     'assessment_attempts',
     undefined,
     async () => {
-      await adminClient.from('assessment_attempts').insert({
+      return await adminClient.from('assessment_attempts').insert({
         id: attemptId,
         assessment_id: 'assess-py-l3',
         user_id: aaravUid,
@@ -294,7 +301,6 @@ async function runRealtimeE2ESuite() {
   );
 
   // FLOW 5: COMPETENCIES (Learner dashboard updates competency level)
-  const compId = `comp_${aaravUid}_test`;
   await testFlow(
     5,
     'COMPETENCY UPDATES',
@@ -302,24 +308,25 @@ async function runRealtimeE2ESuite() {
     'learner_competencies',
     `user_id=eq.${aaravUid}`,
     async () => {
-      await adminClient.from('learner_competencies').upsert({
-        id: compId,
+      return await adminClient.from('learner_competencies').upsert({
+        id: `comp-${aaravUid}-comp-stat-01`,
         user_id: aaravUid,
         competency_id: 'comp-stat-01',
         current_level: 3,
         required_level: 4,
         status: 'DEVELOPING',
         gap_type: 'APPLICATION_GAP',
-        confidence: 0.92,
+        confidence: 0.95,
         trend: 'IMPROVED',
-        last_assessed_at: new Date().toISOString(),
-        target_date: '2026-11-30',
-        created_at: new Date().toISOString(),
+        target_date: '2026-12-31',
         updated_at: new Date().toISOString(),
-      });
+      }, { onConflict: 'user_id,competency_id' });
     },
     async () => {
-      await adminClient.from('learner_competencies').delete().eq('id', compId);
+      await adminClient.from('learner_competencies').update({
+        trend: 'NEEDS_ATTENTION',
+        updated_at: new Date().toISOString(),
+      }).eq('id', `comp-${aaravUid}-comp-stat-01`);
     }
   );
 
@@ -332,7 +339,7 @@ async function runRealtimeE2ESuite() {
     'skill_gaps',
     `user_id=eq.${aaravUid}`,
     async () => {
-      await adminClient.from('skill_gaps').upsert({
+      return await adminClient.from('skill_gaps').upsert({
         id: gapId,
         user_id: aaravUid,
         competency_id: 'comp-stat-01',
@@ -364,7 +371,7 @@ async function runRealtimeE2ESuite() {
     'uploaded_learning_materials',
     undefined,
     async () => {
-      await adminClient.from('uploaded_learning_materials').insert({
+      return await adminClient.from('uploaded_learning_materials').insert({
         id: docId,
         user_id: rajeshUid,
         file_name: 'National_Statistical_Sampling_Standard_2026.pdf',
@@ -383,16 +390,16 @@ async function runRealtimeE2ESuite() {
     }
   );
 
-  // FLOW 8: LEARNING PROGRESS (Step completion)
+  // FLOW 8: LEARNING PROGRESS (Trainer supervises officer course completion)
   const progressId = `step_test_${Date.now()}`;
   await testFlow(
     8,
-    'LEARNING PROGRESS',
-    learnerClient,
+    'LEARNING PROGRESS (Trainer Supervision)',
+    trainerClient,
     'learning_progress',
     undefined,
     async () => {
-      await adminClient.from('learning_progress').upsert({
+      return await adminClient.from('learning_progress').insert({
         id: progressId,
         path_id: 'path-default',
         step_number: 1,

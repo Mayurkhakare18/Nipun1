@@ -1,5 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { useAuth } from '../../context/AuthContext';
+import { supabaseService } from '../../services/supabaseService';
 import {
   ShieldCheck,
   Lock,
@@ -48,6 +49,9 @@ export const AuthModal: React.FC = () => {
   // Forgot password modal state
   const [showForgotPassword, setShowForgotPassword] = useState(false);
   const [forgotEmail, setForgotEmail] = useState('');
+  const [isForgotSubmitting, setIsForgotSubmitting] = useState(false);
+  const [forgotSuccess, setForgotSuccess] = useState(false);
+  const [forgotError, setForgotError] = useState<string | null>(null);
 
   // Register form state
   const [regName, setRegName] = useState('');
@@ -60,6 +64,35 @@ export const AuthModal: React.FC = () => {
   const [regRole, setRegRole] = useState<'LEARNER' | 'TRAINER' | 'ADMINISTRATOR'>('LEARNER');
 
   if (!isAuthModalOpen) return null;
+
+  const handleForgotSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const cleanEmail = forgotEmail.trim().toLowerCase();
+    if (!cleanEmail || !cleanEmail.includes('@') || !cleanEmail.includes('.')) {
+      setForgotError('Please enter a valid official email address.');
+      return;
+    }
+
+    try {
+      setIsForgotSubmitting(true);
+      setForgotError(null);
+      const res = await supabaseService.resetPasswordForEmail(cleanEmail);
+      setForgotSuccess(true);
+      showNotification('Recovery Email Dispatched', res.message, 'info');
+    } catch (err: any) {
+      console.error('[SupabaseAuth] resetPasswordForEmail error:', err);
+      setForgotError(err?.message || 'Unable to process password reset request. Please try again.');
+    } finally {
+      setIsForgotSubmitting(false);
+    }
+  };
+
+  const resetForgotState = () => {
+    setShowForgotPassword(false);
+    setForgotSuccess(false);
+    setForgotError(null);
+    setForgotEmail('');
+  };
 
   const handleLoginSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -121,7 +154,11 @@ export const AuthModal: React.FC = () => {
             </div>
             <div>
               <h3 className="font-['Public_Sans',sans-serif] font-bold text-lg text-slate-900">
-                {authModalTab === 'signin' ? 'Officer & Cadre Login' : 'Official Portal Registration'}
+                {showForgotPassword
+                  ? 'Password Recovery'
+                  : authModalTab === 'signin'
+                  ? 'Officer & Cadre Login'
+                  : 'Official Portal Registration'}
               </h3>
               <p className="text-xs text-slate-500">
                 Ministry of Statistics &amp; Programme Implementation
@@ -134,47 +171,86 @@ export const AuthModal: React.FC = () => {
         <div className="p-6 pt-3 space-y-4">
           {showForgotPassword ? (
             <div className="space-y-4">
-              <div className="p-4 rounded-xl bg-slate-50 border border-slate-200 text-xs text-slate-600 space-y-1">
-                <p className="font-bold text-slate-900">Password Reset Assistance</p>
-                <p>Enter your official government email (@gov.in / @mospi.gov.in) to receive secure password recovery instructions.</p>
-              </div>
-
-              <div>
-                <label className="block text-xs font-bold text-slate-800 mb-1.5">
-                  Email
-                </label>
-                <div className="relative">
-                  <Mail className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
-                  <input
-                    type="email"
-                    required
-                    value={forgotEmail}
-                    onChange={(e) => setForgotEmail(e.target.value)}
-                    placeholder="name@mospi.gov.in"
-                    className="w-full pl-9 pr-3 py-2.5 text-xs bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:border-slate-800 text-slate-800"
-                  />
+              {forgotSuccess ? (
+                <div className="p-4 rounded-xl bg-emerald-50 border border-emerald-200 text-xs text-emerald-800 space-y-2">
+                  <div className="flex items-center gap-2 font-bold text-emerald-900">
+                    <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+                    <span>Recovery Instructions Dispatched</span>
+                  </div>
+                  <p className="leading-relaxed">
+                    A real Supabase Auth password recovery link has been sent to <strong>{forgotEmail}</strong>. Please check your inbox and spam folder. Click the secure link in that email to reset your password.
+                  </p>
+                  <div className="pt-2">
+                    <button
+                      type="button"
+                      onClick={resetForgotState}
+                      className="w-full py-2.5 bg-emerald-700 hover:bg-emerald-800 text-white font-bold rounded-xl text-xs transition-colors cursor-pointer"
+                    >
+                      Return to Sign In
+                    </button>
+                  </div>
                 </div>
-              </div>
+              ) : (
+                <form onSubmit={handleForgotSubmit} className="space-y-4">
+                  <div className="p-4 rounded-xl bg-slate-50 border border-slate-200 text-xs text-slate-600 space-y-1">
+                    <p className="font-bold text-slate-900">Real Supabase Password Recovery</p>
+                    <p>Enter your registered official email to receive a cryptographically signed password reset link.</p>
+                  </div>
 
-              <div className="flex gap-2">
-                <button
-                  type="button"
-                  onClick={() => setShowForgotPassword(false)}
-                  className="flex-1 py-2.5 bg-white border border-slate-200 hover:bg-slate-50 text-xs font-bold rounded-xl text-slate-600 cursor-pointer"
-                >
-                  Back to Login
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    showNotification('Reset Instructions Sent', `Check inbox for ${forgotEmail || 'your email'}`, 'info');
-                    setShowForgotPassword(false);
-                  }}
-                  className="flex-1 py-2.5 bg-slate-800 hover:bg-slate-900 text-white text-xs font-bold rounded-xl shadow-xs cursor-pointer"
-                >
-                  Send Reset Link
-                </button>
-              </div>
+                  {forgotError && (
+                    <div className="p-3 bg-red-50 border border-red-200 text-red-700 text-xs rounded-xl flex items-center gap-2">
+                      <AlertCircle className="w-4 h-4 shrink-0 text-red-500" />
+                      <span>{forgotError}</span>
+                    </div>
+                  )}
+
+                  <div>
+                    <label className="block text-xs font-bold text-slate-800 mb-1.5">
+                      Registered Official Email
+                    </label>
+                    <div className="relative">
+                      <Mail className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                      <input
+                        type="email"
+                        required
+                        disabled={isForgotSubmitting}
+                        value={forgotEmail}
+                        onChange={(e) => {
+                          setForgotError(null);
+                          setForgotEmail(e.target.value);
+                        }}
+                        placeholder="officer@mospi.gov.in"
+                        className="w-full pl-9 pr-3 py-2.5 text-xs bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:border-slate-800 text-slate-800 disabled:opacity-50"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="flex gap-2">
+                    <button
+                      type="button"
+                      disabled={isForgotSubmitting}
+                      onClick={resetForgotState}
+                      className="flex-1 py-2.5 bg-white border border-slate-200 hover:bg-slate-50 text-xs font-bold rounded-xl text-slate-600 cursor-pointer disabled:opacity-50"
+                    >
+                      Back to Login
+                    </button>
+                    <button
+                      type="submit"
+                      disabled={isForgotSubmitting || !forgotEmail.trim()}
+                      className="flex-1 py-2.5 bg-[#000a1e] hover:bg-[#002147] text-white text-xs font-bold rounded-xl shadow-xs cursor-pointer flex items-center justify-center gap-1.5 disabled:opacity-50"
+                    >
+                      {isForgotSubmitting ? (
+                        <>
+                          <RotateCw className="w-3.5 h-3.5 animate-spin" />
+                          <span>Dispatching...</span>
+                        </>
+                      ) : (
+                        <span>Send Reset Link</span>
+                      )}
+                    </button>
+                  </div>
+                </form>
+              )}
             </div>
           ) : authModalTab === 'signin' ? (
             <>

@@ -14,6 +14,7 @@ import { IGOTCourseModal } from './components/learner/IGOTCourseModal';
 import { NSSTACourseModal } from './components/learner/NSSTACourseModal';
 import { ReassessmentModal } from './components/learner/ReassessmentModal';
 import { DocumentIntelligenceModal } from './components/learner/DocumentIntelligenceModal';
+import { ResetPasswordPage } from './components/auth/ResetPasswordPage';
 import { Sparkles, MessageSquare } from 'lucide-react';
 
 const MainAppContent: React.FC = () => {
@@ -29,6 +30,16 @@ const MainAppContent: React.FC = () => {
             Verifying Officer Authentication Session...
           </span>
         </div>
+      </div>
+    );
+  }
+
+  // Password Recovery / Reset View
+  if (activeView === 'reset-password') {
+    return (
+      <div className="min-h-screen flex flex-col bg-[#f9f9ff] text-[#111c2d] font-['Inter',sans-serif]">
+        <ResetPasswordPage />
+        <NotificationToast />
       </div>
     );
   }

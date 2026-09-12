@@ -25,14 +25,14 @@ export const NipunLogo: React.FC<NipunLogoProps> = ({
       case 'xs':
         return { w: 24, h: 24 };
       case 'sm':
-        return { w: 32, h: 32 };
+        return { w: 34, h: 34 };
       case 'lg':
-        return { w: 56, h: 56 };
+        return { w: 54, h: 54 };
       case 'xl':
         return { w: 84, h: 84 };
       case 'md':
       default:
-        return { w: 42, h: 42 };
+        return { w: 46, h: 46 };
     }
   };
 
@@ -201,15 +201,17 @@ export const NipunLogo: React.FC<NipunLogoProps> = ({
   return (
     <div
       onClick={onClick}
-      className={`inline-flex items-center gap-2.5 select-none ${onClick ? 'cursor-pointer' : ''} ${className}`}
+      className={`inline-flex items-center gap-2.5 sm:gap-3 select-none ${onClick ? 'cursor-pointer' : ''} ${className}`}
     >
       <LogoEmblem />
 
-      <div className="flex flex-col">
-        <div className="flex items-center gap-1.5">
-          <div className={`font-['Public_Sans',sans-serif] font-black tracking-tight flex items-center ${
-            size === 'sm' ? 'text-base' : size === 'lg' ? 'text-2xl' : 'text-lg sm:text-xl'
-          } ${lightModeText ? 'text-white' : 'text-[#001F54]'}`}>
+      <div className="flex flex-col justify-center">
+        <div className="flex items-center gap-2">
+          <div
+            className={`font-['Public_Sans',sans-serif] font-black tracking-tight flex items-center leading-none ${
+              size === 'sm' ? 'text-base' : size === 'lg' ? 'text-2xl' : 'text-xl sm:text-[22px]'
+            } ${lightModeText ? 'text-white' : 'text-[#001F54]'}`}
+          >
             <span>N</span>
             <span className="relative mx-0.5 inline-flex flex-col items-center">
               <span className="w-1.5 h-1 bg-[#00C853] rounded-xs mb-px" />
@@ -218,14 +220,19 @@ export const NipunLogo: React.FC<NipunLogoProps> = ({
             <span>PUN</span>
           </div>
 
-          <span className="text-[9px] uppercase font-extrabold tracking-wider px-1.5 py-0.5 rounded-md bg-[#00C853]/15 text-[#0047AB] border border-[#00C853]/30 hidden sm:inline-block">
+          <span className="text-[10px] uppercase font-black tracking-wider px-1.5 py-0.5 rounded-md bg-[#00C853]/15 text-[#0047AB] border border-[#00C853]/35 inline-block leading-none">
             MoSPI
           </span>
         </div>
 
         {showSubtitle && (
-          <p className={`text-[10px] font-semibold tracking-wide ${lightModeText ? 'text-white/80' : 'text-[#555964]'} hidden sm:block`}>
-            National Statistical Competency Platform
+          <p
+            className={`text-[11px] font-semibold tracking-normal mt-0.5 leading-tight ${
+              lightModeText ? 'text-white/80' : 'text-[#555964]'
+            } whitespace-nowrap`}
+          >
+            <span className="brand-subtitle-full">National Statistical Capacity Platform</span>
+            <span className="brand-subtitle-short">MoSPI Platform</span>
           </p>
         )}
       </div>

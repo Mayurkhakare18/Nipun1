@@ -71,7 +71,7 @@ export const GovHeader: React.FC<GovHeaderProps> = () => {
   return (
     <header className="sticky top-0 z-40 bg-white/95 backdrop-blur-md border-b border-[#c4c6cf]/40 transition-all shadow-xs">
       {/* Official Government Strip */}
-      <div className="bg-[#000a1e] text-white text-[11px] py-1 px-4 sm:px-8 flex items-center justify-between tracking-wide">
+      <div className="bg-[#000a1e] text-white text-[11px] h-8 px-4 sm:px-8 flex items-center justify-between tracking-wide select-none">
         <div className="flex items-center gap-2 font-medium">
           <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
           <span className="font-semibold tracking-wider">GOVERNMENT OF INDIA</span>
@@ -79,7 +79,7 @@ export const GovHeader: React.FC<GovHeaderProps> = () => {
           <span className="text-[#c4c6cf] hidden sm:inline">Ministry of Statistics and Programme Implementation (MoSPI)</span>
         </div>
         <div className="flex items-center gap-3 text-xs text-[#c4c6cf]">
-          <div className="hidden md:flex items-center gap-1 text-[10px] text-emerald-400 bg-white/5 px-2 py-0.5 rounded-md border border-white/10">
+          <div className="hidden md:flex items-center gap-1.5 text-[10px] text-emerald-400 bg-white/5 px-2.5 py-0.5 rounded-md border border-white/10">
             <span className="w-1.5 h-1.5 rounded-full bg-emerald-400"></span>
             <span>Cadre Sync: Live</span>
           </div>
@@ -93,98 +93,103 @@ export const GovHeader: React.FC<GovHeaderProps> = () => {
       </div>
 
       {/* Main App Navigation Bar */}
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-2.5 flex items-center justify-between gap-2 sm:gap-4">
-        {/* Brand & Logo */}
-        <div
-          onClick={() => {
-            if (activeView === 'landing') {
-              window.scrollTo({ top: 0, behavior: 'smooth' });
-            } else {
-              setActiveTab('dashboard');
-            }
-          }}
-          className="flex items-center gap-3 cursor-pointer group select-none shrink-0"
-        >
-          <NipunLogo variant="horizontal" size="md" />
+      <div className="w-full max-w-[1840px] mx-auto px-3 sm:px-4 lg:px-6 h-[72px] flex items-center justify-between">
+        {/* Zone 1: Branding & Logo */}
+        <div className="flex items-center shrink-0">
+          <div
+            onClick={() => {
+              if (activeView === 'landing') {
+                window.scrollTo({ top: 0, behavior: 'smooth' });
+              } else {
+                setActiveTab('dashboard');
+              }
+            }}
+            className="flex items-center cursor-pointer group select-none py-1"
+            title="NIPUN MoSPI National Platform"
+          >
+            <NipunLogo variant="horizontal" size="md" />
+          </div>
         </div>
 
-        {/* Center/Right Section: Navigation Tabs + Controls */}
-        <div className="flex items-center gap-2 lg:gap-3 ml-auto">
-          {/* Navigation Tabs (Desktop) */}
+        {/* Zone 2: Primary Navigation Tabs (Desktop) */}
+        <div className="hidden lg:flex items-center justify-center shrink-0">
           {activeView === 'landing' ? (
-            <nav className="hidden md:flex items-center gap-3 lg:gap-5 text-xs font-semibold text-[#44474e]">
+            <nav className="flex items-center gap-2 text-sm font-semibold text-[#44474e]">
               <a
                 href="#about"
-                className="hover:text-[#000a1e] transition-colors py-1.5 px-2.5 rounded-xl hover:bg-[#f0f3ff]"
+                className="h-10 px-4 inline-flex items-center rounded-xl hover:text-[#000a1e] hover:bg-[#f0f3ff] transition-colors"
               >
                 About
               </a>
               <a
                 href="#how-it-works"
-                className="hover:text-[#000a1e] transition-colors py-1.5 px-2.5 rounded-xl hover:bg-[#f0f3ff]"
+                className="h-10 px-4 inline-flex items-center rounded-xl hover:text-[#000a1e] hover:bg-[#f0f3ff] transition-colors"
               >
                 How It Works
               </a>
               <a
                 href="#for-institutions"
-                className="hover:text-[#000a1e] transition-colors py-1.5 px-2.5 rounded-xl hover:bg-[#f0f3ff]"
+                className="h-10 px-4 inline-flex items-center rounded-xl hover:text-[#000a1e] hover:bg-[#f0f3ff] transition-colors"
               >
                 iGOT &amp; NSSTA
               </a>
             </nav>
           ) : (
-            <nav className="hidden xl:flex items-center gap-1 bg-[#f0f3ff] p-1 rounded-2xl border border-[#c4c6cf]/40 shadow-2xs">
+            <nav className="gov-nav-container inline-flex items-center bg-[#f0f3ff] rounded-2xl border border-[#c4c6cf]/40 shadow-xs">
               {currentUser?.role === 'LEARNER' && (
                 <>
                   <button
                     onClick={() => setActiveTab('dashboard')}
-                    className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer whitespace-nowrap ${
+                    className={`gov-nav-pill ${
                       activeTab === 'dashboard'
-                        ? 'bg-white text-[#000a1e] shadow-2xs border border-[#c4c6cf]/30'
-                        : 'text-[#44474e] hover:text-[#000a1e] hover:bg-white/50'
+                        ? 'bg-white text-[#000a1e] shadow-2xs border border-[#c4c6cf]/40'
+                        : 'text-[#44474e] hover:text-[#000a1e] hover:bg-white/60'
                     }`}
                   >
-                    <Compass className="w-3.5 h-3.5 text-[#fe9832]" />
+                    <Compass className="w-4 h-4 text-[#fe9832] shrink-0" />
                     <span>Dashboard</span>
                   </button>
                   <button
                     onClick={() => setActiveTab('competencies')}
-                    className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer whitespace-nowrap ${
+                    className={`gov-nav-pill ${
                       activeTab === 'competencies' || activeTab === 'passport'
-                        ? 'bg-white text-[#000a1e] shadow-2xs border border-[#c4c6cf]/30'
-                        : 'text-[#44474e] hover:text-[#000a1e] hover:bg-white/50'
+                        ? 'bg-white text-[#000a1e] shadow-2xs border border-[#c4c6cf]/40'
+                        : 'text-[#44474e] hover:text-[#000a1e] hover:bg-white/60'
                     }`}
                   >
-                    <Award className="w-3.5 h-3.5 text-[#fe9832]" />
-                    <span>My Competencies</span>
+                    <Award className="w-4 h-4 text-[#fe9832] shrink-0" />
+                    <span className="nav-long-text">My Competencies</span>
+                    <span className="nav-short-text">Competencies</span>
                   </button>
                   <button
                     onClick={() => setIsGapCheckerOpen(true)}
-                    className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl text-xs font-bold text-[#44474e] hover:text-[#000a1e] hover:bg-white/50 transition-all cursor-pointer whitespace-nowrap"
+                    className="gov-nav-pill text-[#44474e] hover:text-[#000a1e] hover:bg-white/60"
                   >
-                    <Sparkles className="w-3.5 h-3.5 text-[#fe9832]" />
-                    <span>AI Gap Checker</span>
+                    <Sparkles className="w-4 h-4 text-[#fe9832] shrink-0" />
+                    <span className="nav-long-text">AI Gap Checker</span>
+                    <span className="nav-short-text">Gap Checker</span>
                   </button>
                   <button
                     onClick={() => setActiveTab('learning-path')}
-                    className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer whitespace-nowrap ${
+                    className={`gov-nav-pill ${
                       activeTab === 'learning-path' || activeTab === 'recommendations'
-                        ? 'bg-white text-[#000a1e] shadow-2xs border border-[#c4c6cf]/30'
-                        : 'text-[#44474e] hover:text-[#000a1e] hover:bg-white/50'
+                        ? 'bg-white text-[#000a1e] shadow-2xs border border-[#c4c6cf]/40'
+                        : 'text-[#44474e] hover:text-[#000a1e] hover:bg-white/60'
                     }`}
                   >
-                    <TrendingUp className="w-3.5 h-3.5 text-[#fe9832]" />
-                    <span>Learning Path</span>
+                    <TrendingUp className="w-4 h-4 text-[#fe9832] shrink-0" />
+                    <span className="nav-long-text">Learning Path</span>
+                    <span className="nav-short-text">Learning</span>
                   </button>
                   <button
                     onClick={() => setActiveTab('assessments')}
-                    className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer whitespace-nowrap ${
+                    className={`gov-nav-pill ${
                       activeTab === 'assessments'
-                        ? 'bg-white text-[#000a1e] shadow-2xs border border-[#c4c6cf]/30'
-                        : 'text-[#44474e] hover:text-[#000a1e] hover:bg-white/50'
+                        ? 'bg-white text-[#000a1e] shadow-2xs border border-[#c4c6cf]/40'
+                        : 'text-[#44474e] hover:text-[#000a1e] hover:bg-white/60'
                     }`}
                   >
-                    <CheckCircle2 className="w-3.5 h-3.5 text-[#fe9832]" />
+                    <CheckCircle2 className="w-4 h-4 text-[#fe9832] shrink-0" />
                     <span>Assessments</span>
                   </button>
                 </>
@@ -194,33 +199,36 @@ export const GovHeader: React.FC<GovHeaderProps> = () => {
                 <>
                   <button
                     onClick={() => setActiveTab('dashboard')}
-                    className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer whitespace-nowrap ${
+                    className={`gov-nav-pill ${
                       activeTab === 'dashboard'
-                        ? 'bg-white text-[#000a1e] shadow-2xs'
-                        : 'text-[#44474e] hover:text-[#000a1e]'
+                        ? 'bg-white text-[#000a1e] shadow-2xs border border-[#c4c6cf]/40'
+                        : 'text-[#44474e] hover:text-[#000a1e] hover:bg-white/60'
                     }`}
                   >
-                    Dashboard
+                    <Compass className="w-4 h-4 text-[#fe9832] shrink-0" />
+                    <span>Dashboard</span>
                   </button>
                   <button
                     onClick={() => setActiveTab('quiz-generator')}
-                    className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer whitespace-nowrap ${
+                    className={`gov-nav-pill ${
                       activeTab === 'quiz-generator'
-                        ? 'bg-white text-[#000a1e] shadow-2xs'
-                        : 'text-[#44474e] hover:text-[#000a1e]'
+                        ? 'bg-white text-[#000a1e] shadow-2xs border border-[#c4c6cf]/40'
+                        : 'text-[#44474e] hover:text-[#000a1e] hover:bg-white/60'
                     }`}
                   >
-                    Assessments
+                    <Award className="w-4 h-4 text-[#fe9832] shrink-0" />
+                    <span>Assessments</span>
                   </button>
                   <button
                     onClick={() => setActiveTab('analytics')}
-                    className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer whitespace-nowrap ${
+                    className={`gov-nav-pill ${
                       activeTab === 'analytics'
-                        ? 'bg-white text-[#000a1e] shadow-2xs'
-                        : 'text-[#44474e] hover:text-[#000a1e]'
+                        ? 'bg-white text-[#000a1e] shadow-2xs border border-[#c4c6cf]/40'
+                        : 'text-[#44474e] hover:text-[#000a1e] hover:bg-white/60'
                     }`}
                   >
-                    Analytics
+                    <TrendingUp className="w-4 h-4 text-[#fe9832] shrink-0" />
+                    <span>Analytics</span>
                   </button>
                 </>
               )}
@@ -229,242 +237,251 @@ export const GovHeader: React.FC<GovHeaderProps> = () => {
                 <>
                   <button
                     onClick={() => setActiveTab('dashboard')}
-                    className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer whitespace-nowrap ${
+                    className={`gov-nav-pill ${
                       activeTab === 'dashboard'
-                        ? 'bg-white text-[#000a1e] shadow-2xs'
-                        : 'text-[#44474e] hover:text-[#000a1e]'
+                        ? 'bg-white text-[#000a1e] shadow-2xs border border-[#c4c6cf]/40'
+                        : 'text-[#44474e] hover:text-[#000a1e] hover:bg-white/60'
                     }`}
                   >
-                    Dashboard
+                    <Compass className="w-4 h-4 text-[#fe9832] shrink-0" />
+                    <span>Dashboard</span>
                   </button>
                   <button
                     onClick={() => setActiveTab('workforce')}
-                    className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer whitespace-nowrap ${
+                    className={`gov-nav-pill ${
                       activeTab === 'workforce'
-                        ? 'bg-white text-[#000a1e] shadow-2xs'
-                        : 'text-[#44474e] hover:text-[#000a1e]'
+                        ? 'bg-white text-[#000a1e] shadow-2xs border border-[#c4c6cf]/40'
+                        : 'text-[#44474e] hover:text-[#000a1e] hover:bg-white/60'
                     }`}
                   >
-                    Workforce
+                    <UserCheck className="w-4 h-4 text-[#fe9832] shrink-0" />
+                    <span>Workforce</span>
                   </button>
                   <button
                     onClick={() => setActiveTab('effectiveness')}
-                    className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer whitespace-nowrap ${
+                    className={`gov-nav-pill ${
                       activeTab === 'effectiveness'
-                        ? 'bg-white text-[#000a1e] shadow-2xs'
-                        : 'text-[#44474e] hover:text-[#000a1e]'
+                        ? 'bg-white text-[#000a1e] shadow-2xs border border-[#c4c6cf]/40'
+                        : 'text-[#44474e] hover:text-[#000a1e] hover:bg-white/60'
                     }`}
                   >
-                    Analytics
+                    <TrendingUp className="w-4 h-4 text-[#fe9832] shrink-0" />
+                    <span>Analytics</span>
                   </button>
                   <button
                     onClick={() => setActiveTab('integrations')}
-                    className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer whitespace-nowrap ${
+                    className={`gov-nav-pill ${
                       activeTab === 'integrations' || activeTab === 'framework'
-                        ? 'bg-white text-[#000a1e] shadow-2xs'
-                        : 'text-[#44474e] hover:text-[#000a1e]'
+                        ? 'bg-white text-[#000a1e] shadow-2xs border border-[#c4c6cf]/40'
+                        : 'text-[#44474e] hover:text-[#000a1e] hover:bg-white/60'
                     }`}
                   >
-                    Competency Framework
+                    <Award className="w-4 h-4 text-[#fe9832] shrink-0" />
+                    <span>Competency Framework</span>
                   </button>
                 </>
               )}
             </nav>
           )}
+        </div>
 
-          {/* Right Side Action Buttons */}
-          <div className="flex items-center gap-1.5 sm:gap-2">
-            {/* Quick Search Trigger (in workspace) */}
-            {activeView === 'workspace' && (
-              <button
-                onClick={() => setIsSearchOpen(true)}
-                className="hidden lg:flex items-center gap-1.5 px-2.5 py-1.5 bg-[#f0f3ff] hover:bg-[#e4ebff] text-[#44474e] rounded-xl text-xs font-medium border border-[#c4c6cf]/40 transition-all cursor-pointer"
-                title="Quick Search (Ctrl + K)"
-              >
-                <Search className="w-3.5 h-3.5 text-[#74777f]" />
-                <span className="hidden 2xl:inline">Search portal...</span>
-                <kbd className="text-[10px] bg-white px-1.5 py-0.5 rounded-md border border-[#c4c6cf]/40 text-[#74777f] font-mono">
-                  ⌘K
-                </kbd>
-              </button>
-            )}
-
-            {/* AI Assistant Direct Trigger in Workspace */}
-            {activeView === 'workspace' && (
-              <button
-                onClick={() => setIsAIMentorOpen(true)}
-                className="flex items-center gap-1.5 px-2.5 py-1.5 bg-[#002147] hover:bg-[#000a1e] text-white rounded-xl text-xs font-bold shadow-2xs transition-all cursor-pointer whitespace-nowrap"
-                title="Open AI Statistical Assistant"
-              >
-                <Sparkles className="w-3.5 h-3.5 text-[#fe9832]" />
-                <span className="hidden sm:inline">AI Assistant</span>
-              </button>
-            )}
-
-            {activeView === 'landing' ? (
-              <>
-                <button
-                  onClick={() => openAuthModal('signin')}
-                  className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold text-[#000a1e] bg-[#f0f3ff] hover:bg-[#e4ebff] border border-[#c4c6cf]/50 rounded-xl transition-all cursor-pointer"
-                >
-                  <ShieldCheck className="w-3.5 h-3.5 text-[#fe9832]" />
-                  <span>Officer Sign In</span>
-                </button>
-
-                <button
-                  onClick={() => launchWorkspace('dashboard')}
-                  className="flex items-center gap-1.5 px-3.5 py-2 text-xs font-bold text-white bg-[#000a1e] hover:bg-[#002147] rounded-xl shadow-xs transition-all cursor-pointer"
-                >
-                  <span>Launch Workspace</span>
-                  <ChevronRight className="w-3.5 h-3.5 text-[#fe9832]" />
-                </button>
-              </>
-            ) : (
-              <>
-                {/* Quick AI Tools Dropdown */}
-                <div className="relative">
-                  <button
-                    onClick={() => setIsToolsOpen(!isToolsOpen)}
-                    className="flex items-center gap-1.5 px-2.5 py-1.5 bg-[#f0f3ff] hover:bg-[#e4ebff] text-[#002147] rounded-xl text-xs font-bold border border-[#c4c6cf]/40 transition-all cursor-pointer"
-                    title="Quick AI & Verification Tools"
-                  >
-                    <BrainCircuit className="w-3.5 h-3.5 text-[#fe9832]" />
-                    <span className="hidden md:inline">Tools</span>
-                    <ChevronDown className="w-3 h-3 text-[#74777f]" />
-                  </button>
-
-                  {isToolsOpen && (
-                    <>
-                      <div
-                        className="fixed inset-0 z-40"
-                        onClick={() => setIsToolsOpen(false)}
-                      />
-                      <div className="absolute right-0 mt-2 w-64 bg-white rounded-2xl shadow-xl border border-[#c4c6cf]/40 p-2 z-50 space-y-1">
-                        <div className="px-3 py-1.5 text-[10px] font-bold uppercase tracking-wider text-[#74777f] border-b border-[#c4c6cf]/20">
-                          AI Statistical Tools
-                        </div>
-
-                        <button
-                          onClick={() => {
-                            setIsToolsOpen(false);
-                            setIsGapCheckerOpen(true);
-                          }}
-                          className="w-full flex items-center gap-2.5 px-3 py-2 text-xs font-semibold text-[#000a1e] hover:bg-[#f0f3ff] rounded-xl transition-all text-left cursor-pointer"
-                        >
-                          <Sparkles className="w-4 h-4 text-[#fe9832]" />
-                          <div>
-                            <div className="font-bold">AI Gap Predictor</div>
-                            <div className="text-[10px] text-[#74777f]">Cadre deficit diagnosis</div>
-                          </div>
-                        </button>
-
-                        <button
-                          onClick={() => {
-                            setIsToolsOpen(false);
-                            openDocIntelligence();
-                          }}
-                          className="w-full flex items-center gap-2.5 px-3 py-2 text-xs font-semibold text-[#000a1e] hover:bg-[#f0f3ff] rounded-xl transition-all text-left cursor-pointer"
-                        >
-                          <FileText className="w-4 h-4 text-[#002147]" />
-                          <div>
-                            <div className="font-bold">PDF Question Gen</div>
-                            <div className="text-[10px] text-[#74777f]">Extract from MoSPI reports</div>
-                          </div>
-                        </button>
-
-                        <button
-                          onClick={() => {
-                            setIsToolsOpen(false);
-                            openReassessment();
-                          }}
-                          className="w-full flex items-center gap-2.5 px-3 py-2 text-xs font-semibold text-[#000a1e] hover:bg-[#f0f3ff] rounded-xl transition-all text-left cursor-pointer"
-                        >
-                          <CheckCircle2 className="w-4 h-4 text-emerald-600" />
-                          <div>
-                            <div className="font-bold">Post-Reassessment</div>
-                            <div className="text-[10px] text-[#74777f]">Verify skill gap closure</div>
-                          </div>
-                        </button>
-
-                        <button
-                          onClick={() => {
-                            setIsToolsOpen(false);
-                            setIsAIMentorOpen(true);
-                          }}
-                          className="w-full flex items-center gap-2.5 px-3 py-2 text-xs font-semibold text-[#000a1e] hover:bg-[#f0f3ff] rounded-xl transition-all text-left cursor-pointer"
-                        >
-                          <Sparkles className="w-4 h-4 text-[#fe9832]" />
-                          <div>
-                            <div className="font-bold">AI Statistical Mentor</div>
-                            <div className="text-[10px] text-[#74777f]">Ask official cadre doubts</div>
-                          </div>
-                        </button>
-
-                        <div className="pt-1 border-t border-[#c4c6cf]/30">
-                          <button
-                            onClick={() => {
-                              setIsToolsOpen(false);
-                              setActiveTab('purpose');
-                            }}
-                            className="w-full flex items-center gap-2.5 px-3 py-2 text-xs font-semibold text-[#000a1e] hover:bg-[#f0f3ff] rounded-xl transition-all text-left cursor-pointer"
-                          >
-                            <Compass className="w-4 h-4 text-[#002147]" />
-                            <div>
-                              <div className="font-bold">Change Career Purpose</div>
-                              <div className="text-[10px] text-[#74777f]">Select specialization track</div>
-                            </div>
-                          </button>
-                        </div>
-                      </div>
-                    </>
-                  )}
-                </div>
-
-                {/* Role Switcher Pill */}
-                <button
-                  onClick={() => setIsDemoSelectorOpen(true)}
-                  className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-bold text-[#002147] bg-[#f0f3ff] hover:bg-[#e4ebff] border border-[#c4c6cf]/50 rounded-xl transition-all cursor-pointer whitespace-nowrap"
-                  title="Switch demo profile"
-                >
-                  <UserCheck className="w-3.5 h-3.5 text-[#fe9832]" />
-                  <span className="hidden sm:inline">{currentUser?.name?.split(' ')[0] || 'User'}</span>
-                  <span className="text-[9px] px-1.5 py-0.5 rounded-md bg-[#002147] text-white font-mono">
-                    {currentUser?.role === 'LEARNER' ? 'Officer' : currentUser?.role}
-                  </span>
-                </button>
-
-                {/* Logout Button */}
-                {isAuthenticated && (
-                  <button
-                    onClick={() => logout()}
-                    className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold text-rose-700 bg-rose-50 hover:bg-rose-100 border border-rose-200 rounded-xl transition-all cursor-pointer whitespace-nowrap shadow-2xs"
-                    title="Sign out of official session"
-                  >
-                    <LogOut className="w-3.5 h-3.5 text-rose-600" />
-                    <span>Logout</span>
-                  </button>
-                )}
-
-                {/* Exit / Return */}
-                <button
-                  onClick={() => setActiveView('landing')}
-                  className="hidden md:block px-2.5 py-1.5 text-xs font-semibold text-[#74777f] hover:text-[#000a1e] hover:bg-[#f0f3ff] rounded-xl transition-all border border-[#c4c6cf]/30 cursor-pointer"
-                  title="Return to Portal Home"
-                >
-                  Home
-                </button>
-              </>
-            )}
-
-            {/* Mobile / Tablet Menu Button */}
+        {/* Zone 3: Utility & Action Controls */}
+        <div className="gov-actions-container flex items-center justify-end shrink-0">
+          {/* Quick Search Trigger (in workspace) */}
+          {activeView === 'workspace' && (
             <button
-              onClick={() => setIsMobileMenuOpen(!isMobileMenuOpen)}
-              className="xl:hidden p-2 text-[#000a1e] hover:bg-[#f0f3ff] rounded-xl transition-colors cursor-pointer"
-              aria-label="Toggle menu"
+              onClick={() => setIsSearchOpen(true)}
+              className="gov-search-box h-10 px-3 bg-[#f0f3ff] hover:bg-[#e4ebff] text-[#44474e] rounded-xl text-xs font-medium border border-[#c4c6cf]/40 transition-all cursor-pointer shrink-0 shadow-2xs flex items-center justify-between"
+              title="Quick Search (Ctrl + K)"
             >
-              {isMobileMenuOpen ? <X className="w-5 h-5" /> : <Menu className="w-5 h-5" />}
+              <div className="flex items-center gap-2 min-w-0">
+                <Search className="w-4 h-4 text-[#74777f] shrink-0" />
+                <span className="truncate text-xs text-[#555964]">Search portal...</span>
+              </div>
+              <kbd className="text-[10px] bg-white px-1.5 py-0.5 rounded-md border border-[#c4c6cf]/40 text-[#74777f] font-mono leading-none shrink-0">
+                ⌘K
+              </kbd>
             </button>
-          </div>
+          )}
+
+          {/* AI Assistant Direct Trigger in Workspace */}
+          {activeView === 'workspace' && (
+            <button
+              onClick={() => setIsAIMentorOpen(true)}
+              className="gov-action-btn bg-[#002147] hover:bg-[#000a1e] text-white font-bold shadow-xs"
+              title="Open AI Statistical Assistant"
+            >
+              <Sparkles className="w-4 h-4 text-[#fe9832] shrink-0" />
+              <span>AI Assistant</span>
+            </button>
+          )}
+
+          {activeView === 'landing' ? (
+            <>
+              <button
+                onClick={() => openAuthModal('signin')}
+                className="hidden sm:inline-flex items-center gap-2 h-10 px-4 text-xs font-bold text-[#000a1e] bg-[#f0f3ff] hover:bg-[#e4ebff] border border-[#c4c6cf]/50 rounded-xl transition-all cursor-pointer shrink-0 shadow-2xs"
+              >
+                <ShieldCheck className="w-4 h-4 text-[#fe9832] shrink-0" />
+                <span>Officer Sign In</span>
+              </button>
+
+              <button
+                onClick={() => launchWorkspace('dashboard')}
+                className="inline-flex items-center gap-2 h-10 px-5 text-xs font-bold text-white bg-[#000a1e] hover:bg-[#002147] rounded-xl shadow-xs transition-all cursor-pointer shrink-0"
+              >
+                <span>Launch Workspace</span>
+                <ChevronRight className="w-4 h-4 text-[#fe9832] shrink-0" />
+              </button>
+            </>
+          ) : (
+            <>
+              {/* Quick AI Tools Dropdown */}
+              <div className="relative shrink-0">
+                <button
+                  onClick={() => setIsToolsOpen(!isToolsOpen)}
+                  className="gov-action-btn bg-[#f0f3ff] hover:bg-[#e4ebff] text-[#002147] font-bold border border-[#c4c6cf]/40 shadow-2xs"
+                  title="Quick AI & Verification Tools"
+                >
+                  <BrainCircuit className="w-4 h-4 text-[#fe9832] shrink-0" />
+                  <span>Tools</span>
+                  <ChevronDown className="w-3.5 h-3.5 text-[#74777f] shrink-0" />
+                </button>
+
+                {isToolsOpen && (
+                  <>
+                    <div
+                      className="fixed inset-0 z-40"
+                      onClick={() => setIsToolsOpen(false)}
+                    />
+                    <div className="absolute right-0 mt-2 w-64 bg-white rounded-2xl shadow-xl border border-[#c4c6cf]/40 p-2 z-50 space-y-1">
+                      <div className="px-3 py-1.5 text-[10px] font-bold uppercase tracking-wider text-[#74777f] border-b border-[#c4c6cf]/20">
+                        AI Statistical Tools
+                      </div>
+
+                      <button
+                        onClick={() => {
+                          setIsToolsOpen(false);
+                          setIsGapCheckerOpen(true);
+                        }}
+                        className="w-full flex items-center gap-2.5 px-3 py-2 text-xs font-semibold text-[#000a1e] hover:bg-[#f0f3ff] rounded-xl transition-all text-left cursor-pointer"
+                      >
+                        <Sparkles className="w-4 h-4 text-[#fe9832]" />
+                        <div>
+                          <div className="font-bold">AI Gap Predictor</div>
+                          <div className="text-[10px] text-[#74777f]">Cadre deficit diagnosis</div>
+                        </div>
+                      </button>
+
+                      <button
+                        onClick={() => {
+                          setIsToolsOpen(false);
+                          openDocIntelligence();
+                        }}
+                        className="w-full flex items-center gap-2.5 px-3 py-2 text-xs font-semibold text-[#000a1e] hover:bg-[#f0f3ff] rounded-xl transition-all text-left cursor-pointer"
+                      >
+                        <FileText className="w-4 h-4 text-[#002147]" />
+                        <div>
+                          <div className="font-bold">PDF Question Gen</div>
+                          <div className="text-[10px] text-[#74777f]">Extract from MoSPI reports</div>
+                        </div>
+                      </button>
+
+                      <button
+                        onClick={() => {
+                          setIsToolsOpen(false);
+                          openReassessment();
+                        }}
+                        className="w-full flex items-center gap-2.5 px-3 py-2 text-xs font-semibold text-[#000a1e] hover:bg-[#f0f3ff] rounded-xl transition-all text-left cursor-pointer"
+                      >
+                        <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+                        <div>
+                          <div className="font-bold">Post-Reassessment</div>
+                          <div className="text-[10px] text-[#74777f]">Verify skill gap closure</div>
+                        </div>
+                      </button>
+
+                      <button
+                        onClick={() => {
+                          setIsToolsOpen(false);
+                          setIsAIMentorOpen(true);
+                        }}
+                        className="w-full flex items-center gap-2.5 px-3 py-2 text-xs font-semibold text-[#000a1e] hover:bg-[#f0f3ff] rounded-xl transition-all text-left cursor-pointer"
+                      >
+                        <Sparkles className="w-4 h-4 text-[#fe9832]" />
+                        <div>
+                          <div className="font-bold">AI Statistical Mentor</div>
+                          <div className="text-[10px] text-[#74777f]">Ask official cadre doubts</div>
+                        </div>
+                      </button>
+
+                      <div className="pt-1 border-t border-[#c4c6cf]/30">
+                        <button
+                          onClick={() => {
+                            setIsToolsOpen(false);
+                            setActiveTab('purpose');
+                          }}
+                          className="w-full flex items-center gap-2.5 px-3 py-2 text-xs font-semibold text-[#000a1e] hover:bg-[#f0f3ff] rounded-xl transition-all text-left cursor-pointer"
+                        >
+                          <Compass className="w-4 h-4 text-[#002147]" />
+                          <div>
+                            <div className="font-bold">Change Career Purpose</div>
+                            <div className="text-[10px] text-[#74777f]">Select specialization track</div>
+                          </div>
+                        </button>
+                      </div>
+                    </div>
+                  </>
+                )}
+              </div>
+
+              {/* Role Switcher Pill */}
+              <button
+                onClick={() => setIsDemoSelectorOpen(true)}
+                className="gov-action-btn text-[#002147] bg-[#f0f3ff] hover:bg-[#e4ebff] border border-[#c4c6cf]/50 font-bold shadow-2xs"
+                title="Switch demo profile"
+              >
+                <UserCheck className="w-4 h-4 text-[#fe9832] shrink-0" />
+                <span className="officer-name-text truncate max-w-[85px]">
+                  {currentUser?.name?.split(' ')[0] || 'Aarav'}
+                </span>
+                <span className="text-[10px] px-1.5 py-0.5 rounded-md bg-[#002147] text-white font-mono leading-none shrink-0">
+                  {currentUser?.role === 'LEARNER' ? 'Officer' : currentUser?.role}
+                </span>
+              </button>
+
+              {/* Logout Button */}
+              {isAuthenticated && (
+                <button
+                  onClick={() => logout()}
+                  className="gov-action-btn font-bold text-rose-700 bg-rose-50 hover:bg-rose-100 border border-rose-200 shadow-2xs"
+                  title="Sign out of official session"
+                >
+                  <LogOut className="w-4 h-4 text-rose-600 shrink-0" />
+                  <span>Logout</span>
+                </button>
+              )}
+
+              {/* Return to Landing / Home */}
+              <button
+                onClick={() => setActiveView('landing')}
+                className="gov-action-btn font-semibold text-[#44474e] hover:text-[#000a1e] hover:bg-[#f0f3ff] border border-[#c4c6cf]/40 shadow-2xs"
+                title="Return to Portal Home"
+              >
+                <Compass className="w-4 h-4 text-[#74777f] shrink-0" />
+                <span className="home-text">Home</span>
+              </button>
+            </>
+          )}
+
+          {/* Mobile / Tablet Menu Button */}
+          <button
+            onClick={() => setIsMobileMenuOpen(!isMobileMenuOpen)}
+            className="lg:hidden inline-flex items-center justify-center h-10 w-10 text-[#000a1e] hover:bg-[#f0f3ff] rounded-xl transition-colors cursor-pointer shrink-0 border border-[#c4c6cf]/40"
+            aria-label="Toggle menu"
+          >
+            {isMobileMenuOpen ? <X className="w-5 h-5" /> : <Menu className="w-5 h-5" />}
+          </button>
         </div>
       </div>
 

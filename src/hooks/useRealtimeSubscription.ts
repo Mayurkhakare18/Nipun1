@@ -7,6 +7,7 @@ export interface UseRealtimeSubscriptionOptions {
   schema?: string;
   event?: 'INSERT' | 'UPDATE' | 'DELETE' | '*';
   filter?: string;
+  purpose?: string;
   enabled?: boolean;
   onPayload: (payload: RealtimePostgresChangesPayload<any>) => void;
 }
@@ -16,6 +17,7 @@ export function useRealtimeSubscription({
   schema = 'public',
   event = '*',
   filter,
+  purpose,
   enabled = true,
   onPayload,
 }: UseRealtimeSubscriptionOptions) {
@@ -36,15 +38,28 @@ export function useRealtimeSubscription({
       try {
         setStatus('SUBSCRIBING');
 
-        // Deterministic, stable channel name without Date.now() churn
-        const sanitizedFilter = filter ? filter.replace(/[^a-zA-Z0-9_=.]/g, '_') : 'all';
-        const channelName = `realtime:${schema}:${table}:${sanitizedFilter}`;
+        // 1. Ensure current session JWT is passed to Realtime socket
+        try {
+          const { data: { session } } = await supabase.auth.getSession();
+          if (session?.access_token) {
+            await supabase.realtime.setAuth(session.access_token);
+          }
+        } catch (authErr) {
+          console.warn('[Supabase Realtime] Pre-subscription auth check notice:', authErr);
+        }
 
-        // If an existing channel with the same name exists, remove it cleanly first
+        if (!isMounted) return;
+
+        // 2. Stable, deterministic channel identifier based on table, filter, and subscription purpose
+        const sanitizedFilter = filter ? filter.replace(/[^a-zA-Z0-9_=.]/g, '_') : 'all';
+        const purposeTag = purpose ? `_${purpose}` : '';
+        const channelName = `nipun_${schema}_${table}_${sanitizedFilter}${purposeTag}`;
+
+        // If an existing channel with the same name exists, clean it up first to avoid duplicates
         const existingChannels = supabase.getChannels();
-        const existingChannel = existingChannels.find((ch) => ch.topic === channelName || ch.topic === `realtime:${channelName}`);
-        if (existingChannel) {
-          await supabase.removeChannel(existingChannel);
+        const existing = existingChannels.find((ch) => ch.topic === `realtime:${channelName}` || ch.topic === channelName);
+        if (existing) {
+          await supabase.removeChannel(existing);
         }
 
         if (!isMounted) return;
@@ -72,12 +87,16 @@ export function useRealtimeSubscription({
           )
           .subscribe((subscriptionStatus, err) => {
             if (!isMounted) return;
+
             if (subscriptionStatus === 'SUBSCRIBED') {
               setStatus('SUBSCRIBED');
             } else if (subscriptionStatus === 'CLOSED') {
               setStatus('CLOSED');
-            } else if (subscriptionStatus === 'CHANNEL_ERROR' || subscriptionStatus === 'TIMED_OUT') {
-              console.warn(`[Supabase Realtime] Channel status for ${table}:`, subscriptionStatus, err?.message || '');
+            } else if (subscriptionStatus === 'CHANNEL_ERROR') {
+              console.warn(`[Supabase Realtime] Channel error on ${table}:`, err?.message || '');
+              setStatus('ERROR');
+            } else if (subscriptionStatus === 'TIMED_OUT') {
+              console.warn(`[Supabase Realtime] Channel timed out on ${table}`);
               setStatus('ERROR');
             }
           });
@@ -98,7 +117,7 @@ export function useRealtimeSubscription({
       }
       setStatus('CLOSED');
     };
-  }, [table, schema, event, filter, enabled]);
+  }, [table, schema, event, filter, purpose, enabled]);
 
   return { status };
 }

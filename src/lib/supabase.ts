@@ -13,3 +13,23 @@ export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
     detectSessionInUrl: true,
   },
 });
+
+if (typeof window !== 'undefined') {
+  (window as any).__supabase = supabase;
+}
+
+// Automatically synchronize valid authenticated JWT to Realtime WebSocket
+// across login, token refresh, and session restoration
+supabase.auth.onAuthStateChange(async (event, session) => {
+  if (session?.access_token) {
+    try {
+      await supabase.realtime.setAuth(session.access_token);
+    } catch (err) {
+      console.warn('[Supabase Realtime] Automatic setAuth warning:', err);
+    }
+  } else if (event === 'SIGNED_OUT') {
+    try {
+      await supabase.realtime.setAuth(null as any);
+    } catch {}
+  }
+});

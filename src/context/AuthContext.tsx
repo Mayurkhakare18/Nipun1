@@ -526,8 +526,11 @@ export interface AuthContextType {
   isAuthReady: boolean;
   authError: string | null;
   clearAuthError: () => void;
-  activeView: 'landing' | 'workspace';
-  setActiveView: (view: 'landing' | 'workspace') => void;
+  activeView: 'landing' | 'workspace' | 'reset-password';
+  setActiveView: (view: 'landing' | 'workspace' | 'reset-password') => void;
+  isRecoverySession: boolean;
+  resetPassword: (email: string) => Promise<{ success: boolean; message: string }>;
+  updatePassword: (newPassword: string) => Promise<{ success: boolean }>;
   activeTab: string;
   setActiveTab: (tab: string) => void;
   switchUserRole: (userId: string) => Promise<void>;
@@ -621,7 +624,15 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [gaps, setGaps] = useState<GapAnalysisResult[]>(DEFAULT_GAPS);
   const [prioritySkill, setPrioritySkill] = useState<PrioritySkillRecommendation | null>(null);
   const [isLoading, setIsLoading] = useState<boolean>(false);
-  const [activeView, setActiveView] = useState<'landing' | 'workspace'>('landing');
+  const [activeView, setActiveView] = useState<'landing' | 'workspace' | 'reset-password'>(() => {
+    if (typeof window !== 'undefined') {
+      const urlParams = new URLSearchParams(window.location.search);
+      const v = urlParams.get('view');
+      if (v === 'workspace' || v === 'landing' || v === 'reset-password') return v;
+    }
+    return 'landing';
+  });
+  const [isRecoverySession, setIsRecoverySession] = useState<boolean>(false);
   const [activeTab, setActiveTab] = useState<string>('dashboard');
 
   // Automated calculation of priority skill whenever competencies or gaps change
@@ -819,6 +830,29 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         }
       }
 
+      // Check for password recovery flow in URL
+      const isRecovery =
+        typeof window !== 'undefined' &&
+        (window.location.hash.includes('type=recovery') ||
+          window.location.hash.includes('recovery') ||
+          window.location.search.includes('type=recovery'));
+
+      if (isRecovery) {
+        setIsRecoverySession(true);
+        setActiveView('reset-password');
+        if (session?.user) {
+          tokenStorage.set(session.access_token);
+          try {
+            await supabase.realtime.setAuth(session.access_token);
+          } catch (rtErr) {
+            console.warn('[AuthContext] realtime setAuth notice:', rtErr);
+          }
+        }
+        setIsAuthReady(true);
+        setIsLoading(false);
+        return;
+      }
+
       if (session?.user) {
         tokenStorage.set(session.access_token);
         try {
@@ -849,7 +883,12 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         tokenStorage.clear();
         setCurrentUser(null);
         setIsAuthenticated(false);
-        setActiveView('landing');
+        const urlParams = typeof window !== 'undefined' ? new URLSearchParams(window.location.search) : null;
+        if (urlParams?.get('view') === 'workspace') {
+          setActiveView('workspace');
+        } else {
+          setActiveView('landing');
+        }
       }
     } catch (err) {
       console.error('Session initialization error:', err);
@@ -868,6 +907,20 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
     // 2. Subscribe to Supabase Auth state changes
     const { data: authListener } = supabase.auth.onAuthStateChange(async (event, session) => {
+      if (event === 'PASSWORD_RECOVERY') {
+        setIsRecoverySession(true);
+        setActiveView('reset-password');
+        if (session?.access_token) {
+          tokenStorage.set(session.access_token);
+          try {
+            await supabase.realtime.setAuth(session.access_token);
+          } catch (rtErr) {
+            console.warn('[AuthContext] realtime setAuth notice:', rtErr);
+          }
+        }
+        return;
+      }
+
       if (event === 'SIGNED_IN') {
         if (session?.user) {
           tokenStorage.set(session.access_token);
@@ -1449,6 +1502,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         clearAuthError,
         activeView,
         setActiveView,
+        isRecoverySession,
+        resetPassword: (email: string) => supabaseService.resetPasswordForEmail(email),
+        updatePassword: (newPassword: string) => supabaseService.updatePassword(newPassword),
         activeTab,
         setActiveTab: handleSetActiveTab,
         switchUserRole,

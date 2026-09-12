@@ -213,7 +213,7 @@ export async function persistLearnerCompetencies(
   }));
 
   const { error } = await serverSupabase.from('learner_competencies').upsert(rows, {
-    onConflict: 'id',
+    onConflict: 'user_id,competency_id',
   });
 
   if (error) {
@@ -248,7 +248,7 @@ export async function persistSkillGaps(
   }));
 
   const { error } = await serverSupabase.from('skill_gaps').upsert(rows, {
-    onConflict: 'id',
+    onConflict: 'user_id,competency_id',
   });
 
   if (error) {
@@ -449,3 +449,88 @@ export async function persistUploadedMaterial(
     throw new Error(`Failed to persist uploaded material in PostgreSQL: ${error.message}`);
   }
 }
+
+export async function persistNotification(
+  serverSupabase: SupabaseClient,
+  notification: {
+    id?: string;
+    userId: string;
+    title: string;
+    message: string;
+    type?: string;
+    read?: boolean;
+    createdAt?: string;
+  }
+) {
+  const notifId = notification.id || `notif-${Date.now()}`;
+  const now = notification.createdAt || new Date().toISOString();
+
+  // In-memory sync
+  if (!db.state.notifications) {
+    (db.state as any).notifications = [];
+  }
+  db.state.notifications.unshift({
+    id: notifId,
+    userId: notification.userId,
+    title: notification.title,
+    message: notification.message,
+    timestamp: now,
+    read: notification.read ?? false,
+  });
+
+  const { error } = await serverSupabase.from('notifications').insert({
+    id: notifId,
+    user_id: notification.userId,
+    title: notification.title,
+    message: notification.message,
+    type: notification.type || 'SYSTEM',
+    read: notification.read ?? false,
+    created_at: now,
+  });
+
+  if (error) {
+    console.error('[DBSync] notifications insert failed:', error.message);
+    throw new Error(`Failed to persist notification in PostgreSQL: ${error.message}`);
+  }
+
+  return { id: notifId, createdAt: now };
+}
+
+export async function persistAssignment(
+  serverSupabase: SupabaseClient,
+  assignment: {
+    id?: string;
+    userId: string;
+    title: string;
+    departmentId?: string;
+    startDate?: string;
+    endDate?: string;
+    isCurrent?: boolean;
+    roleInProject?: string;
+    keyTechnologies?: string[];
+  }
+) {
+  const assignId = assignment.id || `assign-${Date.now()}`;
+  const now = new Date().toISOString();
+
+  const { error } = await serverSupabase.from('assignments').insert({
+    id: assignId,
+    user_id: assignment.userId,
+    title: assignment.title,
+    department_id: assignment.departmentId || null,
+    start_date: assignment.startDate || new Date().toISOString().split('T')[0],
+    end_date: assignment.endDate || null,
+    is_current: assignment.isCurrent ?? true,
+    role_in_project: assignment.roleInProject || 'Statistical Officer',
+    key_technologies: assignment.keyTechnologies || ['Python', 'SQL'],
+    created_at: now,
+  });
+
+  if (error) {
+    console.error('[DBSync] assignments insert failed:', error.message);
+    throw new Error(`Failed to persist assignment in PostgreSQL: ${error.message}`);
+  }
+
+  return { id: assignId, createdAt: now };
+}
+

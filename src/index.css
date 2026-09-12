@@ -151,3 +151,168 @@
   background: rgba(116, 119, 127, 0.4);
 }
 
+/* ==========================================================================
+   Responsive Government Navbar Design System
+   ========================================================================== */
+
+.gov-nav-pill {
+  height: 40px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  white-space: nowrap;
+  font-weight: 700;
+  transition: all 0.2s ease;
+  cursor: pointer;
+  border-radius: 12px;
+}
+
+.gov-action-btn {
+  height: 40px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  white-space: nowrap;
+  transition: all 0.2s ease;
+  cursor: pointer;
+  border-radius: 12px;
+  flex-shrink: 0;
+}
+
+/* >= 1600px: Full Luxury Desktop Viewport (1750px+) */
+@media (min-width: 1600px) {
+  .nav-long-text {
+    display: inline !important;
+  }
+  .nav-short-text {
+    display: none !important;
+  }
+  .brand-subtitle-full {
+    display: inline !important;
+  }
+  .brand-subtitle-short {
+    display: none !important;
+  }
+  .gov-nav-pill {
+    padding-left: 11px;
+    padding-right: 11px;
+    font-size: 12px;
+    gap: 6px;
+  }
+  .gov-nav-container {
+    gap: 4px;
+    padding: 3px;
+  }
+  .gov-action-btn {
+    padding-left: 10px;
+    padding-right: 10px;
+    font-size: 12px;
+    gap: 6px;
+  }
+  .gov-actions-container {
+    gap: 8px;
+  }
+  .gov-search-box {
+    width: 192px;
+  }
+  .officer-name-text {
+    display: inline !important;
+  }
+  .home-text {
+    display: inline !important;
+  }
+}
+
+/* 1361px - 1599px: Balanced Desktop Viewport (1440px) */
+@media (min-width: 1361px) and (max-width: 1599px) {
+  .nav-long-text {
+    display: none !important;
+  }
+  .nav-short-text {
+    display: inline !important;
+  }
+  .brand-subtitle-full {
+    display: none !important;
+  }
+  .brand-subtitle-short {
+    display: none !important;
+  }
+  .gov-nav-pill {
+    padding-left: 7px;
+    padding-right: 7px;
+    font-size: 11.5px;
+    gap: 4px;
+  }
+  .gov-nav-container {
+    gap: 2px;
+    padding: 2px;
+  }
+  .gov-action-btn {
+    padding-left: 7px;
+    padding-right: 7px;
+    font-size: 11.5px;
+    gap: 4px;
+  }
+  .gov-actions-container {
+    gap: 5px;
+  }
+  .gov-search-box {
+    width: 180px;
+  }
+  .officer-name-text {
+    display: inline !important;
+  }
+  .home-text {
+    display: none !important;
+  }
+}
+
+/* <= 1360px: Compact Desktop Viewport (1280px) */
+@media (max-width: 1360px) {
+  .nav-long-text {
+    display: none !important;
+  }
+  .nav-short-text {
+    display: inline !important;
+  }
+  .brand-subtitle-full {
+    display: none !important;
+  }
+  .brand-subtitle-short {
+    display: none !important;
+  }
+  .gov-nav-pill {
+    padding-left: 5px;
+    padding-right: 5px;
+    font-size: 11px;
+    gap: 3px;
+  }
+  .gov-nav-container {
+    gap: 1.5px;
+    padding: 2px;
+  }
+  .gov-action-btn {
+    padding-left: 5px;
+    padding-right: 5px;
+    font-size: 11px;
+    gap: 3px;
+  }
+  .gov-actions-container {
+    gap: 3px;
+  }
+  .gov-search-box {
+    width: 176px;
+  }
+  .officer-name-text {
+    display: none !important;
+  }
+  .home-text {
+    display: none !important;
+  }
+}
+
+
+
+
+
+

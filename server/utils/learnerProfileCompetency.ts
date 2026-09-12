@@ -129,7 +129,7 @@ export async function fetchLearnerProfileCompetencyData(
   if (supabase && userId) {
     try {
       const { data: dbUser } = await supabase.from('users').select('*').eq('id', userId).maybeSingle();
-      const { data: dbProfile } = await supabase.from('official_profiles').select('*').eq('id', userId).maybeSingle();
+      const { data: dbProfile } = await supabase.from('official_profiles').select('*').eq('user_id', userId).maybeSingle();
 
       if (dbUser) {
         profile = {

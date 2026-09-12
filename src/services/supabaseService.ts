@@ -241,5 +241,58 @@ export const supabaseService = {
     });
     return () => subscription.unsubscribe();
   },
+
+  /**
+   * Request password reset email using real Supabase Auth
+   */
+  async resetPasswordForEmail(email: string): Promise<{ success: boolean; message: string }> {
+    const cleanEmail = email.trim().toLowerCase();
+    if (!cleanEmail) {
+      throw new Error('Please enter your registered official email address.');
+    }
+
+    // Configure redirect URL pointing to production application
+    const redirectTo =
+      typeof window !== 'undefined' && window.location.hostname === 'localhost'
+        ? `${window.location.origin}/#recovery`
+        : 'https://nipun-test.vercel.app/#recovery';
+
+    const { error } = await supabase.auth.resetPasswordForEmail(cleanEmail, {
+      redirectTo,
+    });
+
+    if (error) {
+      if (error.code === 'email_address_invalid' && cleanEmail.endsWith('@mospi.gov.in')) {
+        throw new Error(
+          'Supabase SMTP requires a domain with valid public MX DNS records. The simulated address @mospi.gov.in cannot receive external email. Please provide a live address or test with an authorized administrator.'
+        );
+      }
+      throw new Error(error.message || 'Unable to dispatch recovery link. Please verify your connection.');
+    }
+
+    return {
+      success: true,
+      message: 'Password reset link dispatched. Please check your email inbox and spam folder.',
+    };
+  },
+
+  /**
+   * Update officer password for the authenticated recovery session
+   */
+  async updatePassword(newPassword: string): Promise<{ success: boolean }> {
+    if (!newPassword || newPassword.length < 8) {
+      throw new Error('Password must be at least 8 characters in length.');
+    }
+
+    const { error } = await supabase.auth.updateUser({
+      password: newPassword,
+    });
+
+    if (error) {
+      throw new Error(error.message || 'Failed to update password. Your recovery session may have expired.');
+    }
+
+    return { success: true };
+  },
 };
 
