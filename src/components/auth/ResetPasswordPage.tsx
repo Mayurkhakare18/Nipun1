@@ -30,26 +30,66 @@ export const ResetPasswordPage: React.FC = () => {
   const [isSuccess, setIsSuccess] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
-  // 1. Verify active Supabase recovery session exists
+  // 1. Verify active Supabase recovery session exists (multi-phase check)
   useEffect(() => {
     let isMounted = true;
 
     async function checkRecoverySession() {
+      // Phase A: check current session immediately
       try {
-        const { data: { session }, error } = await supabase.auth.getSession();
-        if (error || !session?.user) {
-          if (isMounted) setHasValidSession(false);
+        const { data: { session } } = await supabase.auth.getSession();
+        if (session?.user) {
+          if (isMounted) {
+            setHasValidSession(true);
+            setUserEmail(session.user.email || '');
+          }
           return;
         }
+      } catch (err) {
+        console.warn('[ResetPassword] Initial session check notice:', err);
+      }
 
-        if (isMounted) {
+      // Phase B: listen for PASSWORD_RECOVERY or SIGNED_IN event
+      const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
+        if (!isMounted) return;
+        if ((event === 'PASSWORD_RECOVERY' || event === 'SIGNED_IN' || event === 'USER_UPDATED') && session?.user) {
           setHasValidSession(true);
           setUserEmail(session.user.email || '');
         }
-      } catch (err) {
-        console.warn('[ResetPassword] Session check error:', err);
-        if (isMounted) setHasValidSession(false);
+      });
+
+      // Phase C: If URL has access_token or recovery markers, poll briefly for async hash processing
+      const hasRecoveryTokensInUrl =
+        typeof window !== 'undefined' &&
+        (window.location.hash.includes('access_token') ||
+          window.location.hash.includes('type=recovery') ||
+          window.location.search.includes('code=') ||
+          window.location.search.includes('type=recovery'));
+
+      const maxAttempts = hasRecoveryTokensInUrl ? 12 : 3;
+      for (let attempt = 0; attempt < maxAttempts; attempt++) {
+        if (!isMounted) {
+          subscription.unsubscribe();
+          return;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 200));
+        try {
+          const { data: { session } } = await supabase.auth.getSession();
+          if (session?.user) {
+            if (isMounted) {
+              setHasValidSession(true);
+              setUserEmail(session.user.email || '');
+            }
+            subscription.unsubscribe();
+            return;
+          }
+        } catch {}
       }
+
+      if (isMounted) {
+        setHasValidSession(false);
+      }
+      subscription.unsubscribe();
     }
 
     checkRecoverySession();
@@ -88,6 +128,14 @@ export const ResetPasswordPage: React.FC = () => {
         'Your official credentials have been updated securely in Supabase Auth.',
         'success'
       );
+
+      // Cleanly sign out the temporary recovery session so user signs in freshly with new password
+      try {
+        await supabase.auth.signOut();
+      } catch {}
+      if (typeof window !== 'undefined' && window.location.hash) {
+        window.history.replaceState(null, '', window.location.pathname);
+      }
     } catch (err: any) {
       console.error('[ResetPassword] Update error:', err);
       setErrorMessage(

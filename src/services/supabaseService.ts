@@ -251,11 +251,13 @@ export const supabaseService = {
       throw new Error('Please enter your registered official email address.');
     }
 
-    // Configure redirect URL pointing to production application
+    // Configure canonical redirect URL pointing to application root with trailing slash.
+    // GoTrue appends the authentication hash (#access_token=...&type=recovery) cleanly
+    // without double-hashing.
     const redirectTo =
       typeof window !== 'undefined' && window.location.hostname === 'localhost'
-        ? `${window.location.origin}/#recovery`
-        : 'https://nipun-test.vercel.app/#recovery';
+        ? `${window.location.origin}/`
+        : 'https://nipun-test.vercel.app/';
 
     const { error } = await supabase.auth.resetPasswordForEmail(cleanEmail, {
       redirectTo,
@@ -266,6 +268,13 @@ export const supabaseService = {
         throw new Error(
           'Supabase SMTP requires a domain with valid public MX DNS records. The simulated address @mospi.gov.in cannot receive external email. Please provide a live address or test with an authorized administrator.'
         );
+      }
+      if (
+        (error as any).status === 429 ||
+        error.code === 'over_email_send_rate_limit' ||
+        error.message?.toLowerCase().includes('rate')
+      ) {
+        throw new Error('Too many reset requests. Please wait before requesting another reset email.');
       }
       throw new Error(error.message || 'Unable to dispatch recovery link. Please verify your connection.');
     }

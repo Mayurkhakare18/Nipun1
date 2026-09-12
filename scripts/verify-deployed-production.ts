@@ -128,23 +128,54 @@ async function run() {
       const metrics = await send('Runtime.evaluate', {
         expression: `
           (() => {
-            const header = document.querySelector('header');
-            const box = (el) => {
-              if (!el) return null;
-              const r = el.getBoundingClientRect();
-              return { x: Math.round(r.x), y: Math.round(r.y), w: Math.round(r.width), h: Math.round(r.height) };
-            };
-            const allItems = header ? Array.from(header.querySelectorAll('button, a, input, [role="button"]')).map(el => ({
-              tag: el.tagName,
-              text: (el.innerText || el.getAttribute('placeholder') || el.getAttribute('title') || '').trim().replace(/\\s+/g, ' '),
-              box: box(el)
-            })) : [];
+            try {
+              const header = document.querySelector('header');
+              const mainDiv = header ? (header.querySelector('div[class*="h-[72px]"]') || header.children[1]) : null;
+              const zone1 = mainDiv ? mainDiv.children[0] : null;
+              const zone2 = mainDiv ? mainDiv.children[1] : null;
+              const zone3 = mainDiv ? mainDiv.children[2] : null;
 
-            return {
-              viewport: window.innerWidth,
-              header: box(header),
-              elements: allItems
-            };
+              const box = (el) => {
+                if (!el) return null;
+                const r = el.getBoundingClientRect();
+                return { x: Math.round(r.x), y: Math.round(r.y), w: Math.round(r.width), h: Math.round(r.height) };
+              };
+
+              const navBtns = zone2 ? Array.from(zone2.querySelectorAll('button')).map(b => ({
+                text: b.innerText.trim().replace(/\s+/g, ' '),
+                box: box(b)
+              })) : [];
+
+              const actItems = zone3 ? Array.from(zone3.children).map(b => ({
+                text: (b.innerText || b.getAttribute('title') || '').trim().replace(/\s+/g, ' '),
+                box: box(b)
+              })) : [];
+
+              const allItems = header ? Array.from(header.querySelectorAll('button, a, input, [role="button"]')).map(el => ({
+                tag: el.tagName,
+                text: (el.innerText || el.getAttribute('placeholder') || el.getAttribute('title') || '').trim().replace(/\s+/g, ' '),
+                box: box(el)
+              })) : [];
+
+              const lastItem = actItems.length > 0 ? actItems[actItems.length - 1] : (allItems[allItems.length - 1] || null);
+              const rightmostX = lastItem && lastItem.box ? lastItem.box.x + lastItem.box.w : 0;
+
+              return {
+                viewport: window.innerWidth,
+                header: box(header),
+                mainNav: box(mainDiv),
+                zone1_Brand: box(zone1),
+                zone2_Nav: box(zone2),
+                zone3_Actions: box(zone3),
+                navBtns,
+                actItems,
+                rightmostX,
+                rightMargin: window.innerWidth - rightmostX,
+                fitsWithoutClipping: rightmostX <= window.innerWidth
+              };
+            } catch (err) {
+              return { error: err.message, stack: err.stack };
+            }
           })()
         `,
         returnByValue: true,

@@ -81,7 +81,15 @@ export const AuthModal: React.FC = () => {
       showNotification('Recovery Email Dispatched', res.message, 'info');
     } catch (err: any) {
       console.error('[SupabaseAuth] resetPasswordForEmail error:', err);
-      setForgotError(err?.message || 'Unable to process password reset request. Please try again.');
+      const isRateLimit =
+        err?.status === 429 ||
+        err?.message?.toLowerCase().includes('rate') ||
+        err?.message?.toLowerCase().includes('too many');
+      setForgotError(
+        isRateLimit
+          ? 'Too many reset requests. Please wait before requesting another reset email.'
+          : (err?.message || 'Unable to process password reset request. Please try again.')
+      );
     } finally {
       setIsForgotSubmitting(false);
     }

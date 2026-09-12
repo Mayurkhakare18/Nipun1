@@ -830,12 +830,15 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         }
       }
 
-      // Check for password recovery flow in URL
+      // Check for password recovery flow in global flag, sessionStorage, or URL
       const isRecovery =
-        typeof window !== 'undefined' &&
-        (window.location.hash.includes('type=recovery') ||
-          window.location.hash.includes('recovery') ||
-          window.location.search.includes('type=recovery'));
+        Boolean(typeof window !== 'undefined' && (window as any).__isRecoveryFlow) ||
+        (typeof window !== 'undefined' && sessionStorage.getItem('nipun_recovery_flow') === 'true') ||
+        isRecoverySession ||
+        (typeof window !== 'undefined' &&
+          (window.location.hash.includes('type=recovery') ||
+            window.location.hash.includes('recovery') ||
+            window.location.search.includes('type=recovery')));
 
       if (isRecovery) {
         setIsRecoverySession(true);
@@ -923,6 +926,19 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
       if (event === 'SIGNED_IN') {
         if (session?.user) {
+          // If in recovery flow, do NOT navigate away from reset-password to workspace!
+          const isUrlRecovery =
+            typeof window !== 'undefined' &&
+            (window.location.hash.includes('type=recovery') || window.location.search.includes('type=recovery'));
+          if (isRecoverySession || isUrlRecovery) {
+            setIsRecoverySession(true);
+            setActiveView('reset-password');
+            if (session.access_token) {
+              tokenStorage.set(session.access_token);
+            }
+            return;
+          }
+
           tokenStorage.set(session.access_token);
           try {
             await supabase.realtime.setAuth(session.access_token);
@@ -1355,6 +1371,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       tokenStorage.clear();
       setCurrentUser(null);
       setIsAuthenticated(false);
+      setIsRecoverySession(false);
 
       // Close all active modals & drawers
       setIsAuthModalOpen(false);
@@ -1368,9 +1385,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       setActiveNsstaProgram(null);
       setActiveView('landing');
       if (typeof window !== 'undefined') {
+        delete (window as any).__isRecoveryFlow;
         try {
           sessionStorage.removeItem('nipun_active_tab');
           sessionStorage.removeItem('nipun_pending_tab');
+          sessionStorage.removeItem('nipun_recovery_flow');
         } catch {}
       }
       showNotification('Session Ended', 'You have been securely signed out of the official statistical system.');
